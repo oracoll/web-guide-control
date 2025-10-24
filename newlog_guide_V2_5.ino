@@ -1396,18 +1396,13 @@ void loop() {
       if (!isManualMode) {
         // AUTO MODE: Velocity PID
         double error = setPoint - input;
-        bool inDeadband = abs(error) < deadband;
 
-        if (inDeadband) {
+        myPID.Compute(); // Always compute PID to keep state updated
+
+        // Apply deadband
+        if (abs(error) < deadband) {
           output = 0.0;
-        } else {
-          myPID.Compute();
         }
-
-        // Apply direction
-        if (error < 0) output = -abs(output);
-        else if (error > 0) output = abs(output);
-        else output = 0;
 
         // Adaptive speed limits
         int maxVel = autoModeSpeed;
