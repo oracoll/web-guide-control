@@ -1334,6 +1334,7 @@ void setup() {
   stepper.setMaxSpeed(stepperMaxSpeed);
   stepper.setAcceleration(stepperAcceleration);
   myPID.SetMode(AUTOMATIC);
+  myPID.SetOutputLimits(-stepperMaxSpeed, stepperMaxSpeed); // Set bipolar output limits
   myPID.SetSampleTime(20);
   initMenuValues();
   lastEncoderPos = myEnc.read();
