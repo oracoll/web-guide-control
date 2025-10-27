@@ -239,6 +239,7 @@ const unsigned long LIMIT_DEBOUNCE_MS = 50;
 
 unsigned long displayLockoutUntil = 0;
 const unsigned long DISPLAY_LOCKOUT_MS = 500;
+unsigned long stateTimer = 0;
 
 // ====================================================================
 // EEPROM CONFIGURATION
@@ -414,7 +415,6 @@ void loadSettings() {
 void runHomingSequence() {
   wdt_reset();
   unsigned long now = millis();
-  static unsigned long stateTimer = 0;
   bool timeout = (now - homingStartTime > HOMING_TIMEOUT_MS);
 
   switch(homingState) {
@@ -1455,13 +1455,11 @@ void main_loop() {
   leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
   rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
 
-void loop() {
-  if (systemState == STATE_SETUP) {
-    setup_loop();
-  } else {
-    main_loop();
+  // Homing
+  if (!homingDone && homingState != HOMING_IDLE) {
+    runHomingSequence();
+    return;
   }
-}
 
   // Calibration
   if (calibState != CALIB_IDLE) {
