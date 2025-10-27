@@ -285,10 +285,6 @@ void createBarGraphChars() {
   }
 }
 
-void loop() {
-  main_loop();
-}
-
 
 // ====================================================================
 // FUNCTION PROTOTYPES
