@@ -178,18 +178,7 @@ const unsigned long CALIB_TIMEOUT_MS = 60000;
 // ====================================================================
 // MENU SYSTEM
 // ====================================================================
-enum MenuState {
-  NORMAL,
-  MENU_BROWSE,
-  MENU_EDIT,
-  MENU_CALIB,
-  MENU_DIGIT_EDIT,
-  MENU_EXIT_CONFIRM,
-  MENU_TRANSITION_TO_NORMAL,
-  MENU_TRANSITION_TO_BROWSE,
-  MENU_TRANSITION_TO_CALIB,
-  MENU_TRANSITION_TO_EXIT_CONFIRM
-};
+enum MenuState { NORMAL, MENU_BROWSE, MENU_EDIT, MENU_CALIB, MENU_DIGIT_EDIT, MENU_EXIT_CONFIRM };
 MenuState menuState = NORMAL;
 int currentMenuItem = 0;
 int menuTopItem = 0;
@@ -296,15 +285,8 @@ void createBarGraphChars() {
   }
 }
 
-enum SystemState { STATE_SETUP, STATE_RUNNING };
-SystemState systemState = STATE_SETUP;
-
 void loop() {
-  if (systemState == STATE_SETUP) {
-    setup_loop();
-  } else {
-    main_loop();
-  }
+  main_loop();
 }
 
 
@@ -699,20 +681,37 @@ void handleMenuSystem() {
     unsigned long held = now - encoderButtonDownTime;
     if (held >= LONG_PRESS_MS) {
       if (menuState == NORMAL) {
-        menuState = MENU_TRANSITION_TO_BROWSE;
-        stateTimer = now;
+        menuState = MENU_BROWSE;
+        lastMenuTopItem = -1;
+        lastCurrentMenuItem = -1;
+        for (int i = 0; i < numMenuItems; i++) {
+          lastMenuValues[i] = 0x7fffffffffffffffLL;
+        }
+        lcd.clear();
+        delay(150);
+        drawMenu();
       } else {
-        menuState = MENU_TRANSITION_TO_NORMAL;
-        stateTimer = now;
+        menuState = NORMAL;
+        lcd.clear();
+        delay(150);
+        updateMainDisplay();
+        displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
       }
     } else if (held >= SHORT_PRESS_MS) {
       if (menuState == MENU_BROWSE) {
         if (currentMenuItem == 11) {
-          menuState = MENU_TRANSITION_TO_CALIB;
-          stateTimer = now;
+          menuState = MENU_CALIB;
+          calibState = CALIB_INIT;
+          currentCalibMenuItem = 0;
+          lastCalibMenuItem = -1;
+          lcd.clear();
+          delay(150);
         } else if (currentMenuItem == numMenuItems - 1) {
-          menuState = MENU_TRANSITION_TO_EXIT_CONFIRM;
-          stateTimer = now;
+          menuState = MENU_EXIT_CONFIRM;
+          currentCalibMenuItem = 0;
+          lastCalibMenuItem = -1;
+          lcd.clear();
+          delay(150);
         } else if (isNumericItem(currentMenuItem)) {
           menuState = MENU_DIGIT_EDIT;
           getMenuValueString(currentMenuItem, editValueStr);
@@ -742,11 +741,18 @@ void handleMenuSystem() {
       } else if (menuState == MENU_EXIT_CONFIRM) {
         if (currentCalibMenuItem == 0) {
           saveSettings();
-          menuState = MENU_TRANSITION_TO_NORMAL;
-          stateTimer = now;
+          menuState = NORMAL;
+          lcd.clear();
+          delay(150);
+          updateMainDisplay();
+          displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
         } else {
-          menuState = MENU_TRANSITION_TO_BROWSE;
-          stateTimer = now;
+          menuState = MENU_BROWSE;
+          lastMenuTopItem = -1;
+          lastCurrentMenuItem = -1;
+          lcd.clear();
+          delay(150);
+          drawMenu();
         }
       } else if (menuState == NORMAL) {
         if (fullTravelSteps > 0 && !leftLimitState && !rightLimitState) {
@@ -757,54 +763,12 @@ void handleMenuSystem() {
   }
   encoderButtonPrevState = encBtnState;
 
-  // Handle menu state transitions
-  switch (menuState) {
-    case MENU_TRANSITION_TO_BROWSE:
-      if (now - stateTimer >= 150) {
-        menuState = MENU_BROWSE;
-        lastMenuTopItem = -1;
-        lastCurrentMenuItem = -1;
-        for (int i = 0; i < numMenuItems; i++) {
-          lastMenuValues[i] = 0x7FFFFFFFFFFFFFFFLL;
-        }
-        lcd.clear();
-        drawMenu();
-      }
-      break;
-    case MENU_TRANSITION_TO_NORMAL:
-      if (now - stateTimer >= 150) {
-        menuState = NORMAL;
-        lcd.clear();
-        updateMainDisplay();
-        displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
-      }
-      break;
-    case MENU_TRANSITION_TO_CALIB:
-      if (now - stateTimer >= 150) {
-        menuState = MENU_CALIB;
-        calibState = CALIB_INIT;
-        currentCalibMenuItem = 0;
-        lastCalibMenuItem = -1;
-        lcd.clear();
-      }
-      break;
-    case MENU_TRANSITION_TO_EXIT_CONFIRM:
-      if (now - stateTimer >= 150) {
-        menuState = MENU_EXIT_CONFIRM;
-        currentCalibMenuItem = 0;
-        lastCalibMenuItem = -1;
-        lcd.clear();
-      }
-      break;
-    default:
-      if (menuState != NORMAL || menuState != lastMenuState) {
-        if (menuState == MENU_EXIT_CONFIRM) {
-          drawCalibMenu();
-        } else if (menuState != NORMAL) {
-          drawMenu();
-        }
-      }
-      break;
+  if (menuState != NORMAL || menuState != lastMenuState) {
+    if (menuState == MENU_EXIT_CONFIRM) {
+      drawCalibMenu();
+    } else if (menuState != NORMAL) {
+      drawMenu();
+    }
   }
   lastMenuState = menuState;
 }
@@ -1369,10 +1333,6 @@ bool updateLimitSwitch(int pin, unsigned long& debounceTime, bool& lastState) {
 // SETUP
 // ====================================================================
 void setup() {
-  real_setup();
-}
-
-void real_setup() {
   pinMode(LEFT_LIMIT_PIN, INPUT);
   pinMode(RIGHT_LIMIT_PIN, INPUT);
   pinMode(DIRECTION_PIN, OUTPUT);
@@ -1387,66 +1347,41 @@ void real_setup() {
   digitalWrite(LEFT_LED_PIN, LOW);
   digitalWrite(RIGHT_LED_PIN, LOW);
   lcd.begin(20, 4);
+  delay(100);
   createBarGraphChars();
-
-  // The rest of the setup is handled in the setup_loop() state machine
-}
-
-void setup_loop() {
-  static int setup_step = 0;
-  static unsigned long welcome_timer = 0;
-  unsigned long currentMillis = millis();
-
-  switch(setup_step) {
-    case 0: // Start LCD and show welcome message
-      lcd.setCursor(0, 0);
-      lcd.print(F(" WEB GUIDE CONTROL"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("  FIRMWARE - V2.9.22"));
-      lcd.setCursor(0, 2);
-      lcd.print(F("Designe by --------"));
-      lcd.setCursor(0, 3);
-      lcd.print(F(" for ------- S.R.L."));
-      welcome_timer = currentMillis;
-      setup_step++;
-      break;
-
-    case 1: // Wait for 2 seconds
-      if (currentMillis - welcome_timer >= 2000) {
-        lcd.clear();
-        welcome_timer = currentMillis;
-        setup_step++;
-      }
-      break;
-
-    case 2: // Wait for 150ms
-      if (currentMillis - welcome_timer >= 150) {
-        loadSettings();
-        stepper.setMaxSpeed(stepperMaxSpeed);
-        stepper.setAcceleration(stepperAcceleration);
-        myPID.SetMode(AUTOMATIC);
-        myPID.SetSampleTime(20);
-        initMenuValues();
-        lastEncoderPos = myEnc.read();
-        lastUpdateTime = millis();
-        wdt_enable(WDTO_4S);
-        if (fullTravelSteps > 0) {
-          homingState = HOMING_INIT;
-          homingDone = false;
-        } else {
-          homingDone = true;
-          updateMainDisplay();
-        }
-        systemState = STATE_RUNNING; // Transition to the main loop
-      }
-      break;
+  lcd.setCursor(0, 0);
+  lcd.print(F(" WEB GUIDE CONTROL"));
+  lcd.setCursor(0, 1);
+  lcd.print(F("  FIRMWARE - V2.9.22"));  // Updated version with Marlin-like moves
+  lcd.setCursor(0, 2);
+  lcd.print(F("Designe by --------"));
+  lcd.setCursor(0, 3);
+  lcd.print(F(" for ------- S.R.L."));
+  delay(2000);
+  lcd.clear();
+  delay(150);
+  loadSettings();
+  stepper.setMaxSpeed(stepperMaxSpeed);
+  stepper.setAcceleration(stepperAcceleration);
+  myPID.SetMode(AUTOMATIC);
+  myPID.SetSampleTime(20);
+  initMenuValues();
+  lastEncoderPos = myEnc.read();
+  lastUpdateTime = millis();
+  wdt_enable(WDTO_4S);
+  if (fullTravelSteps > 0) {
+    homingState = HOMING_INIT;
+    homingDone = false;
+  } else {
+    homingDone = true;
+    updateMainDisplay();
   }
 }
 
 // ====================================================================
 // MAIN LOOP - Mixed velocity and position modes
 // ====================================================================
-void main_loop() {
+void loop() {
   wdt_reset();
   unsigned long currentMillis = millis();
 
