@@ -833,7 +833,15 @@ long getMenuValueInt(int idx) {
 void adjustParameter(int delta) {
   switch(currentMenuItem) {
     case 3: pidDirection = (pidDirection == DIRECT ? REVERSE : DIRECT); myPID.SetControllerDirection(pidDirection); break;
-    case 6: isManualMode = !isManualMode; digitalWrite(MODE_LED_PIN, isManualMode ? LOW : HIGH); break;
+    case 6:
+      isManualMode = !isManualMode;
+      digitalWrite(MODE_LED_PIN, isManualMode ? LOW : HIGH);
+      if (isManualMode) {
+        myPID.SetMode(MANUAL);
+      } else {
+        myPID.SetMode(AUTOMATIC);
+      }
+      break;
   }
 }
 
@@ -1388,6 +1396,7 @@ void loop() {
     if (isManualMode) {
       handleManualButtons();
     } else {
+      // AUTO MODE: Position-based PID
       if (currentMillis - previousMillis >= interval) {
         previousMillis = currentMillis;
         input = readVoltage();
@@ -1396,16 +1405,16 @@ void loop() {
         lcd.print(input, 2);
         lcd.print(F("V   "));
 
-        // AUTO MODE: Velocity PID
         double error = setPoint - input;
         bool inDeadband = abs(error) < deadband;
 
         myPID.Compute();
+        double pidOutput = output;
         if (inDeadband) {
-          output = 0.0;
+          pidOutput = 0.0;
         }
 
-        // Adaptive speed limits
+        // Adaptive speed scaling on the PID output
         int maxVel = autoModeSpeed;
         if (abs(error) > LARGE_ERROR_THRESHOLD) {
           maxVel = autoModeSpeed * FAST_SPEED_MULTIPLIER;
@@ -1413,47 +1422,55 @@ void loop() {
           maxVel = autoModeSpeed * MEDIUM_SPEED_MULTIPLIER;
         }
         maxVel = constrain(maxVel, stepperMinSpeed, STEPPER_MAX_SPEED_MAX);
-        output = constrain(output, -maxVel, maxVel);
+        pidOutput = constrain(pidOutput, -maxVel, maxVel);
 
-        // Enforce limits
-        if (leftLimitState && output < 0) output = 0;
-        if (rightLimitState && output > 0) output = 0;
-
-        // Update position (velocity integration)
+        // Integrate PID output (velocity) to get a position delta
         unsigned long dt = currentMillis - lastUpdateTime;
         lastUpdateTime = currentMillis;
         if (dt > 0) {
-          positionAccumulator += (output * dt) / 1000.0;
-          long stepsToAdd = (long)positionAccumulator;
-          currentPosition += stepsToAdd;
-          positionAccumulator -= stepsToAdd;
+          positionAccumulator += (pidOutput * dt) / 1000.0;
+          long stepsToMove = (long)positionAccumulator;
+          positionAccumulator -= stepsToMove;
+
+          if (stepsToMove != 0) {
+            long newTarget = stepper.targetPosition() + stepsToMove;
+            newTarget = constrain(newTarget, 0L, fullTravelSteps);
+
+            bool movingIntoLeftLimit = newTarget < stepper.currentPosition() && leftLimitState;
+            bool movingIntoRightLimit = newTarget > stepper.currentPosition() && rightLimitState;
+
+            if (!movingIntoLeftLimit && !movingIntoRightLimit) {
+                stepper.moveTo(newTarget);
+            }
+          } else if (inDeadband) {
+            stepper.moveTo(stepper.currentPosition()); // Actively stop
+          }
         }
-        currentPosition = constrain(currentPosition, 0L, fullTravelSteps);
-        stepper.setCurrentPosition(currentPosition);  // Sync with hardware tracker
 
-        // Drive motor in velocity mode
-        stepper.setSpeed((float)output);
-        stepper.runSpeed();
-        updateDirectionLEDsFromVelocity((float)output);
-
-        // Display
+        // Update display text
         lcd.setCursor(0, 1);
         bool isLeft = error > 0;
         lcd.print(isLeft ? F("STANGA  << ") : F("DREAPTA >> "));
         lcd.print(abs(error), 2);
         lcd.print(F("V  "));
+      }
 
-        if (currentMillis - lastPositionUpdate >= POSITION_UPDATE_INTERVAL) {
-          if (currentPosition != lastDisplayedPosition) {
-            lcd.setCursor(0, 2);
-            lcd.print(F("POZITIE: "));
-            lcd.print(currentPosition);
-            lcd.print(F("    "));
-            lastDisplayedPosition = currentPosition;
-          }
-          lastPositionUpdate = currentMillis;
+      // These must run every loop for position-based control
+      stepper.run();
+      currentPosition = stepper.currentPosition();
+      updateDirectionLEDsFromVelocity(stepper.speed());
+
+      // Update position and graph periodically
+      if (currentMillis - lastPositionUpdate >= POSITION_UPDATE_INTERVAL) {
+        if (currentPosition != lastDisplayedPosition) {
+          lcd.setCursor(0, 2);
+          lcd.print(F("POZITIE: "));
+          lcd.print(currentPosition);
+          lcd.print(F("    "));
+          lastDisplayedPosition = currentPosition;
         }
-        displayPositionGraph(isLeft);
+        lastPositionUpdate = currentMillis;
+        displayPositionGraph(setPoint - input > 0);
       }
     }
   }
@@ -1484,7 +1501,9 @@ void handleToggleButton() {
     if (now - toggleButtonDownTime >= DEBOUNCE_MS) {
       isManualMode = !isManualMode;
       digitalWrite(MODE_LED_PIN, isManualMode ? LOW : HIGH);
-      if (!isManualMode && calibState == CALIB_IDLE) {
+      if (isManualMode) {
+        myPID.SetMode(MANUAL);
+      } else {
         myPID.SetMode(AUTOMATIC);
       }
       saveSettings();
