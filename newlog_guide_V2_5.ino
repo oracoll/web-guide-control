@@ -228,7 +228,6 @@ const unsigned long LIMIT_DEBOUNCE_MS = 50;
 
 unsigned long displayLockoutUntil = 0;
 const unsigned long DISPLAY_LOCKOUT_MS = 500;
-unsigned long stateTimer = 0;
 
 // ====================================================================
 // EEPROM CONFIGURATION
@@ -284,7 +283,6 @@ void createBarGraphChars() {
     lcd.createChar(i, barChars[i]); 
   }
 }
-
 
 // ====================================================================
 // FUNCTION PROTOTYPES
@@ -393,6 +391,7 @@ void loadSettings() {
 void runHomingSequence() {
   wdt_reset();
   unsigned long now = millis();
+  static unsigned long stateTimer = 0;
   bool timeout = (now - homingStartTime > HOMING_TIMEOUT_MS);
 
   switch(homingState) {
@@ -924,6 +923,7 @@ void parseEditedValue(int idx) {
 // ====================================================================
 void runCalibration() {
   unsigned long currentMillis = millis();
+  static unsigned long stateTimer = 0;
   bool encBtnState = digitalRead(ENCODER_SW);
   leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
   rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
@@ -969,17 +969,18 @@ void runCalibration() {
         stepper.runSpeed();
       } else {
         stepper.stop();
+        delay(50);
         stepper.setCurrentPosition(0);
         currentPosition = 0;
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
         lcd.clear();
+        delay(150);
         lcd.setCursor(0, 0);
         lcd.print(F("Left Limit Reached"));
         currentCalibMenuItem = 0;
         lastCalibMenuItem = -1;
         calibTimer = currentMillis;
-        stateTimer = currentMillis;
         calibState = CALIB_LEFT_CONFIRM;
       }
       break;
@@ -1033,10 +1034,12 @@ void runCalibration() {
         stepper.runSpeed();
       } else {
         stepper.stop();
+        delay(50);
         fullTravelSteps = stepper.currentPosition();
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
         lcd.clear();
+        delay(150);
         lcd.setCursor(0, 0);
         lcd.print(F("Calib Done: "));
         lcd.print(fullTravelSteps);
@@ -1137,6 +1140,7 @@ void runCalibration() {
 // ====================================================================
 void updateMainDisplay() {
   lcd.clear();
+  delay(150);
   for (int row = 0; row < 4; row++) {
     lcd.setCursor(0, row);
     lcd.print(F("                    "));
@@ -1424,10 +1428,10 @@ void loop() {
         double error = setPoint - input;
         bool inDeadband = abs(error) < deadband;
 
-        myPID.Compute(); // Always compute for state updates
-
         if (inDeadband) {
           output = 0.0;
+        } else {
+          myPID.Compute();
         }
 
         // Apply direction
@@ -1507,11 +1511,12 @@ void loop() {
 // SENSOR FUNCTION
 // ====================================================================
 float readVoltage() {
-    long sum = 0;
-    for (int i = 0; i < 10; i++) {
-        sum += analogRead(A0);
-    }
-    return (sum / 10.0) * (5.0 / 1023.0);
+  long sum = 0;
+  for (int i = 0; i < 10; i++) {
+    sum += analogRead(A0);
+    delay(1);
+  }
+  return (sum / 10.0) * (5.0 / 1023.0);
 }
 
 // ====================================================================
