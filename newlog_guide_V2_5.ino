@@ -1335,6 +1335,7 @@ void setup() {
   stepper.setMaxSpeed(stepperMaxSpeed);
   stepper.setAcceleration(stepperAcceleration);
   myPID.SetMode(AUTOMATIC);
+  myPID.SetOutputLimits(-stepperMaxSpeed, stepperMaxSpeed);
   myPID.SetSampleTime(20);
   initMenuValues();
   lastEncoderPos = myEnc.read();
@@ -1399,16 +1400,10 @@ void loop() {
         double error = setPoint - input;
         bool inDeadband = abs(error) < deadband;
 
+        myPID.Compute();
         if (inDeadband) {
           output = 0.0;
-        } else {
-          myPID.Compute();
         }
-
-        // Apply direction
-        if (error < 0) output = -abs(output);
-        else if (error > 0) output = abs(output);
-        else output = 0;
 
         // Adaptive speed limits
         int maxVel = autoModeSpeed;
@@ -1515,57 +1510,28 @@ bool readStableButtonState(int pin) {
 
 void handleManualButtons() {
   unsigned long now = millis();
+  long newEncoderPos = myEnc.read();
+  long encoderDiff = (newEncoderPos - lastEncoderPos) / 4;
 
-  // Button and Encoder Reading
+  if (encoderDiff != 0) {
+    long targetPos = stepper.currentPosition() + (encoderDiff * stepManualFactor);
+    targetPos = constrain(targetPos, 0L, fullTravelSteps);
+    stepper.moveTo(targetPos);
+    lastEncoderPos = newEncoderPos;
+  }
+
   bool leftBtnState = readStableButtonState(LEFT_BUTTON_PIN);
   bool rightBtnState = readStableButtonState(RIGHT_BUTTON_PIN);
-  float speed = 0.0;
 
-  // Encoder velocity calculation
-  static long prevEncPos = 0;
-  static unsigned long lastEncTime = 0;
-  long currEnc = myEnc.read();
-  unsigned long dt = now - lastEncTime;
-  if (dt > 5) { // Sample every 5ms
-    long rawDelta = currEnc - prevEncPos;
-    if (rawDelta != 0) {
-      long ticks = rawDelta / 4;
-      double rate = (double)ticks * (1000.0 / dt); // Ticks per second
-      speed = rate * stepManualFactor * dynamicSpeedFactor;
-      prevEncPos = currEnc;
-    }
-    lastEncTime = now;
+  if (leftBtnState && !rightBtnState && !leftLimitState) {
+    stepper.moveTo(stepper.currentPosition() - stepManualFactorSW);
+  } else if (rightBtnState && !leftBtnState && !rightLimitState) {
+    stepper.moveTo(stepper.currentPosition() + stepManualFactorSW);
   }
 
-  // Button overrides encoder
-  if (leftBtnState && !rightBtnState) {
-    speed = -stepperMaxSpeed * dynamicSpeedFactor;
-  } else if (rightBtnState && !leftBtnState) {
-    speed = stepperMaxSpeed * dynamicSpeedFactor;
-  }
-
-  // Apply limits
-  if ((leftLimitState && speed < 0) || (rightLimitState && speed > 0)) {
-    speed = 0;
-  }
-  speed = constrain(speed, -stepperMaxSpeed, stepperMaxSpeed);
-  stepper.setSpeed(speed);
-  stepper.runSpeed();
-
-  // Update position
-  unsigned long dt_pos = now - lastUpdateTime;
-  if (dt_pos > 0) {
-    positionAccumulator += (speed * dt_pos) / 1000.0;
-    long stepsToAdd = (long)positionAccumulator;
-    if (stepsToAdd != 0) {
-      currentPosition += stepsToAdd;
-      positionAccumulator -= stepsToAdd;
-      currentPosition = constrain(currentPosition, 0L, fullTravelSteps);
-      stepper.setCurrentPosition(currentPosition);
-    }
-  }
-  lastUpdateTime = now;
-  updateDirectionLEDsFromVelocity(speed);
+  stepper.run();
+  currentPosition = stepper.currentPosition();
+  updateDirectionLEDsFromVelocity(stepper.speed());
 
   // Update display periodically
   if (now - lastPositionUpdate >= POSITION_UPDATE_INTERVAL) {
