@@ -1369,8 +1369,7 @@ bool updateLimitSwitch(int pin, unsigned long& debounceTime, bool& lastState) {
 // SETUP
 // ====================================================================
 void setup() {
-  // This function is intentionally left empty.
-  // Initialization is handled by real_setup().
+  real_setup();
 }
 
 void real_setup() {
@@ -1610,12 +1609,14 @@ void handleToggleButton() {
 }
 
 bool readStableButtonState(int pin) {
-    const int samples = 5;
-    int lowCount = 0;
-    for (int i = 0; i < samples; i++) {
-        if (digitalRead(pin) == LOW) lowCount++;
-    }
-    return lowCount >= (samples * 0.8);
+  const int samples = 5;
+  const int sampleDelay = 2;
+  int lowCount = 0;
+  for (int i = 0; i < samples; i++) {
+    if (digitalRead(pin) == LOW) lowCount++;
+    delay(sampleDelay);
+  }
+  return lowCount >= (samples * 0.8);
 }
 
 void handleManualButtons() {
