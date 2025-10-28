@@ -214,6 +214,7 @@ const unsigned long LIMIT_DEBOUNCE_MS = 50;
 
 unsigned long displayLockoutUntil = 0;
 const unsigned long DISPLAY_LOCKOUT_MS = 500;
+bool justFinishedHoming = false;
 
 // ====================================================================
 // EEPROM CONFIGURATION
@@ -463,7 +464,7 @@ void runHomingSequence() {
       lcd.print(F("Homing Complete"));
       delay(500);
       homingState = HOMING_IDLE;
-      // Return to main loop will trigger a display update
+      justFinishedHoming = true; // Signal for a one-time clear
       break;
 
     default:
@@ -1322,6 +1323,13 @@ void loop() {
   // Menu & buttons are always active
   handleMenuSystem();
   handleToggleButton();
+
+  // Check for one-time clear event after homing
+  if (justFinishedHoming) {
+    lcd.clear();
+    updateMainDisplay();
+    justFinishedHoming = false;
+  }
 
   // Main operational logic only runs when not in menu/calib/centering
   if (menuState == NORMAL && calibState == CALIB_IDLE && !centeringActive) {
