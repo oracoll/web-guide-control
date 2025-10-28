@@ -705,8 +705,12 @@ void handleMenuSystem() {
 void drawMenu() {
   wdt_reset();
   static unsigned long lastMenuUpdate = 0;
-  if (millis() - lastMenuUpdate < 50 && menuState != MENU_DIGIT_EDIT) return;
+  static bool lastBlinkState = true;
+
+  // Rate limit drawing unless the blink state has changed
+  if (millis() - lastMenuUpdate < 50 && blinkState == lastBlinkState) return;
   lastMenuUpdate = millis();
+  lastBlinkState = blinkState;
 
   bool forceRedraw = (lastMenuTopItem == -1) ||
                      (lastCurrentMenuItem != currentMenuItem) ||
