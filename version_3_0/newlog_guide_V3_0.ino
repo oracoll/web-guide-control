@@ -704,32 +704,43 @@ void handleMenuSystem() {
 
 void drawMenu() {
   wdt_reset();
-  lcd.clear(); // Simple clear for 2-line display
+  static unsigned long lastMenuUpdate = 0;
+  if (millis() - lastMenuUpdate < 50 && menuState != MENU_DIGIT_EDIT) return;
+  lastMenuUpdate = millis();
+
+  bool forceRedraw = (lastMenuTopItem == -1) ||
+                     (lastCurrentMenuItem != currentMenuItem) ||
+                     (lastMenuTopItem != menuTopItem);
 
   for (int i = 0; i < 2; i++) {
     int idx = menuTopItem + i;
-    if (idx >= numMenuItems) continue;
+    long currentValue = (idx < numMenuItems) ? getMenuValueInt(idx) : -1;
 
-    lcd.setCursor(0, i);
-    lcd.print(idx == currentMenuItem ? ">" : " ");
+    // Redraw if forced, or if the value has changed
+    if (forceRedraw || lastMenuValues[idx] != currentValue || (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem)) {
+      lcd.setCursor(0, i);
+      lcd.print(F("                    ")); // Clear line
 
-    char lineBuffer[21];
-    char valueStr[24];
+      if (idx < numMenuItems) {
+        lcd.setCursor(0, i);
+        lcd.print(idx == currentMenuItem ? ">" : " ");
+        lcd.print(menuItems[idx]);
 
-    if (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem) {
-      strcpy(valueStr, editValueStr);
-      // Handle blinking digit
-      for (int k = 0; valueStr[k]; k++) {
-        if (k == currentDigitPos && !blinkState && (isdigit(valueStr[k]) || valueStr[k] == '_')) {
-          valueStr[k] = ' ';
+        char valueStr[24];
+        if (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem) {
+          strcpy(valueStr, editValueStr);
+          if (!blinkState && (isdigit(valueStr[currentDigitPos]) || valueStr[currentDigitPos] == '_')) {
+            valueStr[currentDigitPos] = ' ';
+          }
+        } else {
+          getMenuValueString(idx, valueStr);
         }
-      }
-    } else {
-      getMenuValueString(idx, valueStr);
-    }
 
-    snprintf(lineBuffer, sizeof(lineBuffer), "%-14s %5s", menuItems[idx], valueStr);
-    lcd.print(lineBuffer);
+        lcd.setCursor(20 - strlen(valueStr), i);
+        lcd.print(valueStr);
+        lastMenuValues[idx] = currentValue;
+      }
+    }
   }
 
   lastMenuTopItem = menuTopItem;
