@@ -753,31 +753,37 @@ void drawMenu() {
 
 void drawCalibMenu() {
   wdt_reset();
-  lcd.clear();
+  static unsigned long lastUpdate = 0;
 
-  // Line 0: Title
-  lcd.setCursor(0, 0);
-  if (calibState == CALIB_LEFT_CONFIRM) {
-    lcd.print(F("Left Limit Reached"));
-  } else if (calibState == CALIB_RIGHT_CONFIRM) {
-    char buffer[21];
-    snprintf(buffer, sizeof(buffer), "Calib Done: %ld", fullTravelSteps);
-    lcd.print(buffer);
-  } else if (menuState == MENU_EXIT_CONFIRM) {
-    lcd.print(F("Exit & Save?"));
+  // Only redraw if the selection has changed.
+  if (lastCalibMenuItem != currentCalibMenuItem || millis() - lastUpdate > 1000) {
+    lastUpdate = millis();
+    lcd.clear();
+
+    // Line 0: Title
+    lcd.setCursor(0, 0);
+    if (calibState == CALIB_LEFT_CONFIRM) {
+      lcd.print(F("Left Limit Reached"));
+    } else if (calibState == CALIB_RIGHT_CONFIRM) {
+      char buffer[21];
+      snprintf(buffer, sizeof(buffer), "Calib Done: %ld", fullTravelSteps);
+      lcd.print(buffer);
+    } else if (menuState == MENU_EXIT_CONFIRM) {
+      lcd.print(F("Exit & Save?"));
+    }
+
+    // Line 1: Options [>Save] [ Cancel]
+    char lineBuffer[21];
+    sprintf(lineBuffer, "%c%-9s %c%s",
+            (currentCalibMenuItem == 0 ? '>' : ' '),
+            calibMenuItems[0],
+            (currentCalibMenuItem == 1 ? '>' : ' '),
+            calibMenuItems[1]);
+    lcd.setCursor(0, 1);
+    lcd.print(lineBuffer);
+
+    lastCalibMenuItem = currentCalibMenuItem;
   }
-
-  // Line 1: Options [>Save] [ Cancel]
-  char lineBuffer[21];
-  sprintf(lineBuffer, "%c%-9s %c%s",
-          (currentCalibMenuItem == 0 ? '>' : ' '),
-          calibMenuItems[0],
-          (currentCalibMenuItem == 1 ? '>' : ' '),
-          calibMenuItems[1]);
-  lcd.setCursor(0, 1);
-  lcd.print(lineBuffer);
-
-  lastCalibMenuItem = currentCalibMenuItem;
 }
 
 long getMenuValueInt(int idx) {
