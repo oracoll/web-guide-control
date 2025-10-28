@@ -55,7 +55,7 @@ int autoModeSpeed = AUTO_MODE_SPEED_DEFAULT; // Auto mode speed
 
 // Adaptive Speed Parameters
 const double LARGE_ERROR_THRESHOLD = 0.5;    // Fast movement threshold (V)
-const double MEDIUM_ERROR_THRESHOLD = 0.2;   // Medium movement threshold (V) 
+const double MEDIUM_ERROR_THRESHOLD = 0.2;   // Medium movement threshold (V)
 const int FAST_SPEED_MULTIPLIER = 3;         // 3x speed for large errors
 const int MEDIUM_SPEED_MULTIPLIER = 2;       // 2x speed for medium errors
 
@@ -105,38 +105,38 @@ LiquidCrystal lcd(33, 35, 37, 39, 41, 43);
 // ====================================================================
 // ENCODER CONFIGURATION
 // ====================================================================
-Encoder myEnc(3, 2);              
-#define ENCODER_SW 4              
+Encoder myEnc(3, 2);
+#define ENCODER_SW 4
 
 // ====================================================================
 // STEPPER MOTOR CONFIGURATION
 // ====================================================================
-#define STEP_PIN 13               
-#define DIRECTION_PIN 12          
+#define STEP_PIN 13
+#define DIRECTION_PIN 12
 AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIRECTION_PIN);
 
 // ====================================================================
 // LIMIT SWITCHES
 // ====================================================================
-#define LEFT_LIMIT_PIN 25         
-#define RIGHT_LIMIT_PIN 23        
-#define LIMIT_ACTIVE_HIGH true    
+#define LEFT_LIMIT_PIN 25
+#define RIGHT_LIMIT_PIN 23
+#define LIMIT_ACTIVE_HIGH true
 
 // ====================================================================
 // BUTTONS AND LEDS
 // ====================================================================
-#define TOGGLE_BUTTON_PIN 27      
-#define LEFT_BUTTON_PIN 29        
-#define RIGHT_BUTTON_PIN 31       
-#define MODE_LED_PIN 44           
-#define LEFT_LED_PIN 50           
-#define RIGHT_LED_PIN 48          
+#define TOGGLE_BUTTON_PIN 27
+#define LEFT_BUTTON_PIN 29
+#define RIGHT_BUTTON_PIN 31
+#define MODE_LED_PIN 44
+#define LEFT_LED_PIN 50
+#define RIGHT_LED_PIN 48
 
 // ====================================================================
 // PID & POSITION TRACKING
 // ====================================================================
 double input = 0;
-double output = 0;                
+double output = 0;
 PID myPID(&input, &output, &setPoint, Kp, Ki, Kd, pidDirection);
 
 long currentPosition = 0;         // Hardware-tracked position (Marlin-like)
@@ -172,7 +172,7 @@ const int LCD_MENU_ROWS = 4;
 const char* menuItems[] = {
   "PID Kp", "PID Ki", "PID Kd", "PID Direction", "Sensor SetPoint",
   "Deadband", "Operation Mode", "Min Speed", "Max Speed",
-  "Homing Speed", "Auto Speed", "Calib Steps", "Manual Factor", 
+  "Homing Speed", "Auto Speed", "Calib Steps", "Manual Factor",
   "Manual Fac SW", "Acceleration", "Btn Hold Int", "Dyn Speed %", "EXIT MENU"
 };
 const int numMenuItems = sizeof(menuItems) / sizeof(menuItems[0]);
@@ -214,6 +214,7 @@ const unsigned long LIMIT_DEBOUNCE_MS = 50;
 
 unsigned long displayLockoutUntil = 0;
 const unsigned long DISPLAY_LOCKOUT_MS = 500;
+bool justFinishedHoming = false;
 
 // ====================================================================
 // EEPROM CONFIGURATION
@@ -264,9 +265,9 @@ uint8_t barCharsMirrored[8][8] = {
   {0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000}
 };
 
-void createBarGraphChars() { 
+void createBarGraphChars() {
   for (int i = 0; i < 8; i++) {
-    lcd.createChar(i, barChars[i]); 
+    lcd.createChar(i, barChars[i]);
   }
 }
 
@@ -313,8 +314,8 @@ void saveSettings() {
   Settings settings = {
     (float)Kp, (float)Ki, (float)Kd, pidDirection, (float)setPoint,
     (float)deadband, isManualMode, stepperMinSpeed, stepperMaxSpeed,
-    homingSpeed, autoModeSpeed, fullTravelSteps, stepManualFactor, 
-    stepManualFactorSW, stepperAcceleration, buttonHoldInterval, 
+    homingSpeed, autoModeSpeed, fullTravelSteps, stepManualFactor,
+    stepManualFactorSW, stepperAcceleration, buttonHoldInterval,
     dynamicSpeedFactor, 0
   };
   settings.checksum = calculateChecksum(settings);
@@ -384,9 +385,9 @@ void runHomingSequence() {
       lcd.clear();
       delay(100);
       lcd.setCursor(0, 0);
-      lcd.print(F("HOMING SEQUENCE"));
+      lcd.print(F("Homing..."));
       lcd.setCursor(0, 1);
-      lcd.print(F("Homing left..."));
+      lcd.print(F("Moving to left limit"));
       homingStartTime = now;
       stepper.setSpeed(-homingSpeed);  // Negative for left (CCW)
       homingState = HOMING_LEFT;
@@ -395,31 +396,30 @@ void runHomingSequence() {
     case HOMING_LEFT:
       if (timeout) {
         lcd.setCursor(0, 1);
-        lcd.print(F("Homing timeout"));
+        lcd.print(F("Homing timed out!"));
         delay(1000);
         homingState = HOMING_COMPLETE;
         break;
       }
       leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
       if (leftLimitState) {
-        // Limit hit - stop and back off a bit (Marlin-like)
         stepper.stop();
         delay(50);
-        stepper.setCurrentPosition(0);  // Set position to 0 at limit
+        stepper.setCurrentPosition(0);
         currentPosition = 0;
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
         lcd.setCursor(0, 1);
-        lcd.print(F("Left limit hit"));
-        delay(200);  // Brief pause
+        lcd.print(F("Left limit found    "));
+        delay(200);
         if (fullTravelSteps > 0) {
-          // Move to center using position mode (Marlin G0)
           long centerPos = fullTravelSteps / 2;
-          lcd.setCursor(0, 2);
-          lcd.print(F("Moving to center"));
+          lcd.clear();
+          lcd.setCursor(0, 0);
+          lcd.print(F("Centering..."));
           stepper.setMaxSpeed(homingSpeed);
           stepper.setAcceleration(stepperAcceleration);
-          stepper.moveTo(centerPos);  // Relative? No, absolute from 0
+          stepper.moveTo(centerPos);
           homingState = HOMING_CENTER;
         } else {
           homingState = HOMING_COMPLETE;
@@ -434,34 +434,25 @@ void runHomingSequence() {
 
     case HOMING_CENTER:
       if (timeout) {
-        lcd.setCursor(0, 2);
-        lcd.print(F("Center timeout  "));
+        lcd.setCursor(0, 1);
+        lcd.print(F("Center timed out!"));
         delay(1000);
         homingState = HOMING_COMPLETE;
         break;
       }
-      // Run the move to center (non-blocking, Marlin-style)
       stepper.run();
       if (stepper.distanceToGo() == 0) {
-        // Reached center
         currentPosition = stepper.currentPosition();
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
-        lcd.setCursor(0, 2);
-        lcd.print(F("Centered at: "));
-        lcd.print(currentPosition);
-        lcd.print(F("   "));
+        lcd.setCursor(0, 1);
+        char buffer[21];
+        snprintf(buffer, sizeof(buffer), "Center: %ld", currentPosition);
+        lcd.print(buffer);
         delay(500);
         homingState = HOMING_COMPLETE;
       } else {
-        // Update LEDs during move
-        if (stepper.currentPosition() < currentPosition) {  // Moving left
-          digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
-          digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
-        } else {
-          digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
-          digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
-        }
+        // LEDs are updated in main loop now
       }
       break;
 
@@ -470,10 +461,10 @@ void runHomingSequence() {
       lcd.clear();
       delay(100);
       lcd.setCursor(0, 0);
-      lcd.print(F("HOMING COMPLETE"));
+      lcd.print(F("Homing Complete"));
       delay(500);
-      updateMainDisplay();
       homingState = HOMING_IDLE;
+      justFinishedHoming = true; // Signal for a one-time clear
       break;
 
     default:
@@ -493,8 +484,9 @@ void startCentering() {
     stepper.setMaxSpeed(homingSpeed);
     stepper.setAcceleration(stepperAcceleration);
     stepper.moveTo(centerPos);
-    lcd.setCursor(0, 1);
-    lcd.print(F("Moving to center..."));
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(F("Centering..."));
   }
 }
 
@@ -534,15 +526,15 @@ void updateDirectionLEDsFromVelocity(float speed) {
 // ====================================================================
 // MENU SYSTEM FUNCTIONS
 // ====================================================================
-void initMenuValues() { 
+void initMenuValues() {
   for (int i = 0; i < numMenuItems; i++) {
-    lastMenuValues[i] = 0x7fffffffffffffffLL; 
+    lastMenuValues[i] = 0x7fffffffffffffffLL;
   }
 }
 
 bool isNumericItem(int idx) {
   switch(idx) {
-    case 0: case 1: case 2: case 4: case 5: case 7: case 8: case 9: case 10: 
+    case 0: case 1: case 2: case 4: case 5: case 7: case 8: case 9: case 10:
     case 12: case 13: case 14: case 15: case 16: return true;
     default: return false;
   }
@@ -571,8 +563,8 @@ void handleMenuSystem() {
         currentMenuItem = (currentMenuItem + delta + numMenuItems) % numMenuItems;
         if (currentMenuItem < menuTopItem) {
           menuTopItem = currentMenuItem;
-        } else if (currentMenuItem > menuTopItem + 2) {
-          menuTopItem = currentMenuItem - 2;
+        } else if (currentMenuItem > menuTopItem + 1) { // Adjusted for 2 lines
+          menuTopItem = currentMenuItem - 1; // Adjusted for 2 lines
         }
         lastMenuTopItem = -1;
         lastCurrentMenuItem = -1;
@@ -714,96 +706,85 @@ void handleMenuSystem() {
 void drawMenu() {
   wdt_reset();
   static unsigned long lastMenuUpdate = 0;
-  if (millis() - lastMenuUpdate < 50) return;
+  static bool lastBlinkState = true;
+
+  // Rate limit drawing unless the blink state has changed
+  if (millis() - lastMenuUpdate < 50 && blinkState == lastBlinkState) return;
   lastMenuUpdate = millis();
-  bool forceRedraw = (lastMenuTopItem == -1) || 
-                     (lastCurrentMenuItem != currentMenuItem) || 
-                     (lastMenuTopItem != menuTopItem) ||
-                     (menuState == MENU_DIGIT_EDIT || 
-                      menuState == MENU_EDIT && lastMenuValues[currentMenuItem] != getMenuValueInt(currentMenuItem));
-  if (forceRedraw) {
-    lcd.setCursor(0, 0);
-    lcd.print(F("--- Settings Menu ---"));
-  }
-  for (int i = 0; i < 3; i++) {
+  lastBlinkState = blinkState;
+
+  bool forceRedraw = (lastMenuTopItem == -1) ||
+                     (lastCurrentMenuItem != currentMenuItem) ||
+                     (lastMenuTopItem != menuTopItem);
+
+  for (int i = 0; i < 2; i++) {
     int idx = menuTopItem + i;
-    lcd.setCursor(0, i + 1);
-    lcd.print(F("                    "));
-    if (idx >= numMenuItems) continue;
-    lcd.setCursor(0, i + 1);
-    if (idx == currentMenuItem) {
-      lcd.print('>');
-    } else {
-      lcd.print(' ');
-    }
-    lcd.print(menuItems[idx]);
-    int currentPos = strlen(menuItems[idx]) + 1;
-    lcd.setCursor(currentPos, i + 1);
-    char valueStr[24];
-    if (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem) {
-      strcpy(valueStr, editValueStr);
-    } else {
-      getMenuValueString(idx, valueStr);
-    }
-    int valueLen = strlen(valueStr);
-    int valuePos = 20 - valueLen;
-    if (valuePos < currentPos) valuePos = currentPos;
-    lcd.setCursor(valuePos, i + 1);
-    if (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem) {
-      for (int k = 0; k < valueLen; k++) {
-        if (k == currentDigitPos && !blinkState && (isdigit(valueStr[k]) || valueStr[k] == '_')) {
-          lcd.print(' ');
+    long currentValue = (idx < numMenuItems) ? getMenuValueInt(idx) : -1;
+
+    // Redraw if forced, or if the value has changed
+    if (forceRedraw || lastMenuValues[idx] != currentValue || (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem)) {
+      lcd.setCursor(0, i);
+      lcd.print(F("                    ")); // Clear line
+
+      if (idx < numMenuItems) {
+        lcd.setCursor(0, i);
+        lcd.print(idx == currentMenuItem ? ">" : " ");
+        lcd.print(menuItems[idx]);
+
+        char valueStr[24];
+        if (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem) {
+          strcpy(valueStr, editValueStr);
+          if (!blinkState && (isdigit(valueStr[currentDigitPos]) || valueStr[currentDigitPos] == '_')) {
+            valueStr[currentDigitPos] = ' ';
+          }
         } else {
-          lcd.print(valueStr[k]);
+          getMenuValueString(idx, valueStr);
         }
-        lcd.setCursor(valuePos + k + 1, i + 1);
+
+        lcd.setCursor(20 - strlen(valueStr), i);
+        lcd.print(valueStr);
+        lastMenuValues[idx] = currentValue;
       }
-    } else {
-      lcd.print(valueStr);
     }
-    lastMenuValues[idx] = getMenuValueInt(idx);
   }
+
   lastMenuTopItem = menuTopItem;
   lastCurrentMenuItem = currentMenuItem;
 }
 
 void drawCalibMenu() {
   wdt_reset();
-  static unsigned long lastCalibUpdate = 0;
-  if (millis() - lastCalibUpdate < 100) return;
-  lastCalibUpdate = millis();
-  bool forceRedraw = (lastCalibMenuItem != currentCalibMenuItem);
-  if (forceRedraw) {
-    lcd.setCursor(0, 0);
-    lcd.print(F("                    "));
+  static unsigned long lastUpdate = 0;
+
+  // Only redraw if the selection has changed.
+  if (lastCalibMenuItem != currentCalibMenuItem || millis() - lastUpdate > 1000) {
+    lastUpdate = millis();
+    lcd.clear();
+
+    // Line 0: Title
     lcd.setCursor(0, 0);
     if (calibState == CALIB_LEFT_CONFIRM) {
-      lcd.print("Left Limit Reached");
+      lcd.print(F("Left Limit Reached"));
     } else if (calibState == CALIB_RIGHT_CONFIRM) {
-      lcd.print("Calib Done: ");
-      lcd.print(fullTravelSteps);
+      char buffer[21];
+      snprintf(buffer, sizeof(buffer), "Calib Done: %ld", fullTravelSteps);
+      lcd.print(buffer);
     } else if (menuState == MENU_EXIT_CONFIRM) {
-      lcd.print("Exit Menu?");
+      lcd.print(F("Exit & Save?"));
     }
+
+    // Line 1: Options [>Save] [ Cancel]
+    char lineBuffer[21];
+    sprintf(lineBuffer, "%c%-9s %c%s",
+            (currentCalibMenuItem == 0 ? '>' : ' '),
+            calibMenuItems[0],
+            (currentCalibMenuItem == 1 ? '>' : ' '),
+            calibMenuItems[1]);
+    lcd.setCursor(0, 1);
+    lcd.print(lineBuffer);
+
+    lastCalibMenuItem = currentCalibMenuItem;
   }
-  for (int i = 0; i < 2; i++) {
-    lcd.setCursor(0, i + 1);
-    lcd.print(F("                    "));
-    if (i < numCalibMenuItems) {
-      lcd.setCursor(0, i + 1);
-      if (i == currentCalibMenuItem) {
-        lcd.print('>');
-      } else {
-        lcd.print(' ');
-      }
-      lcd.print(calibMenuItems[i]);
-    }
-  }
-  lcd.setCursor(0, 3);
-  lcd.print(F("                    "));
-  lcd.setCursor(0, 3);
-  lcd.print("Press to confirm");
-  lastCalibMenuItem = currentCalibMenuItem;
 }
 
 long getMenuValueInt(int idx) {
@@ -897,7 +878,9 @@ void runCalibration() {
       lcd.clear();
       delay(150);
       lcd.setCursor(0, 0);
-      lcd.print("Calibrating...");
+      lcd.print(F("Calibration Mode"));
+      lcd.setCursor(0, 1);
+      lcd.print(F("Finding Left Limit"));
       calibTimer = currentMillis;
       stepper.setSpeed(-calibSpeed);
       calibState = CALIB_MOVE_LEFT;
@@ -908,8 +891,6 @@ void runCalibration() {
       if (!leftLimitState) {
         digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
         digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
-        lcd.setCursor(0, 1);
-        lcd.print("Moving Left...");
         stepper.runSpeed();
       } else {
         stepper.stop();
@@ -918,10 +899,6 @@ void runCalibration() {
         currentPosition = 0;
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
-        lcd.clear();
-        delay(150);
-        lcd.setCursor(0, 0);
-        lcd.print("Left Limit Reached");
         currentCalibMenuItem = 0;
         lastCalibMenuItem = -1;
         calibTimer = currentMillis;
@@ -939,12 +916,9 @@ void runCalibration() {
         lcd.clear();
         delay(150);
         lcd.setCursor(0, 0);
-        lcd.print("Calib timed out");
+        lcd.print(F("Calib Timed Out"));
         delay(1000);
-        lcd.clear();
-        delay(150);
         wdt_enable(WDTO_4S);
-        updateMainDisplay();
         displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
         break;
       }
@@ -965,20 +939,16 @@ void runCalibration() {
             lcd.clear();
             delay(150);
             lcd.setCursor(0, 0);
-            lcd.print("Calibrating...");
+            lcd.print(F("Finding Right Limit"));
             calibState = CALIB_MOVE_RIGHT;
           } else {
             calibState = CALIB_IDLE;
             menuState = NORMAL;
             lcd.clear();
             delay(150);
-            lcd.setCursor(0, 0);
-            lcd.print("Calib cancelled");
+            lcd.print(F("Calib Cancelled"));
             delay(1000);
-            lcd.clear();
-            delay(150);
             wdt_enable(WDTO_4S);
-            updateMainDisplay();
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
           }
         } else if (held >= LONG_PRESS_MS) {
@@ -986,13 +956,9 @@ void runCalibration() {
           menuState = NORMAL;
           lcd.clear();
           delay(150);
-          lcd.setCursor(0, 0);
-          lcd.print("Calib cancelled");
+          lcd.print(F("Calib Cancelled"));
           delay(1000);
-          lcd.clear();
-          delay(150);
           wdt_enable(WDTO_4S);
-          updateMainDisplay();
           displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
         }
       }
@@ -1006,9 +972,9 @@ void runCalibration() {
         digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
         digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
         lcd.setCursor(0, 1);
-        lcd.print("Steps: ");
-        lcd.print(stepper.currentPosition());
-        lcd.print("    ");
+        char buffer[21];
+        snprintf(buffer, sizeof(buffer), "Steps: %ld", stepper.currentPosition());
+        lcd.print(buffer);
         stepper.runSpeed();
       } else {
         stepper.stop();
@@ -1016,11 +982,6 @@ void runCalibration() {
         fullTravelSteps = stepper.currentPosition();
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
-        lcd.clear();
-        delay(150);
-        lcd.setCursor(0, 0);
-        lcd.print("Calib Done: ");
-        lcd.print(fullTravelSteps);
         currentCalibMenuItem = 0;
         lastCalibMenuItem = -1;
         calibTimer = currentMillis;
@@ -1038,12 +999,9 @@ void runCalibration() {
         lcd.clear();
         delay(150);
         lcd.setCursor(0, 0);
-        lcd.print("Calib timed out");
+        lcd.print(F("Calib Timed Out"));
         delay(1000);
-        lcd.clear();
-        delay(150);
         wdt_enable(WDTO_4S);
-        updateMainDisplay();
         displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
         break;
       }
@@ -1060,31 +1018,20 @@ void runCalibration() {
             saveSettings();
             calibState = CALIB_IDLE;
             menuState = NORMAL;
-            startCentering();
             lcd.clear();
-            delay(150);
-            lcd.setCursor(0, 0);
-            lcd.print("Calib saved");
-            lcd.setCursor(0, 1);
-            lcd.print("Moving to center...");
-            delay(1000);
-            lcd.clear();
-            delay(150);
+            lcd.print(F("Calib Saved"));
+            delay(500);
+            startCentering(); // This will display "Centering..."
             wdt_enable(WDTO_4S);
-            updateMainDisplay();
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
           } else {
             calibState = CALIB_IDLE;
             menuState = NORMAL;
             lcd.clear();
             delay(150);
-            lcd.setCursor(0, 0);
-            lcd.print("Calib cancelled");
+            lcd.print(F("Calib Cancelled"));
             delay(1000);
-            lcd.clear();
-            delay(150);
             wdt_enable(WDTO_4S);
-            updateMainDisplay();
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
           }
         } else if (held >= LONG_PRESS_MS) {
@@ -1092,13 +1039,9 @@ void runCalibration() {
           menuState = NORMAL;
           lcd.clear();
           delay(150);
-          lcd.setCursor(0, 0);
-          lcd.print("Calib cancelled");
+          lcd.print(F("Calib Cancelled"));
           delay(1000);
-          lcd.clear();
-          delay(150);
           wdt_enable(WDTO_4S);
-          updateMainDisplay();
           displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
         }
       }
@@ -1118,26 +1061,30 @@ void runCalibration() {
 // DISPLAY FUNCTIONS
 // ====================================================================
 void updateMainDisplay() {
-  lcd.clear();
-  delay(150);
-  for (int row = 0; row < 4; row++) {
-    lcd.setCursor(0, row);
-    lcd.print(F("                    "));
-  }
-  lcd.setCursor(0, 0);
-  lcd.print(F("Senzor: "));
-  char voltageStr[6];
+  char lineBuffer[21];
+
+  // Line 0: S:x.xxV M:A P:xxxxx
+  char voltageStr[5];
   dtostrf(input, 4, 2, voltageStr);
-  lcd.print(voltageStr);
-  lcd.print(F("V             "));
-  lcd.setCursor(0, 2);
-  lcd.print(F("POZITIE: "));
-  char posStr[12];
-  sprintf(posStr, "%ld", currentPosition);
+  char modeChar = isManualMode ? 'M' : 'A';
+
+  // Create a right-aligned position string
+  char posStr[8];
+  sprintf(posStr, "P:%ld", currentPosition);
+
+  // Print left-aligned part
+  sprintf(lineBuffer, "S:%sV M:%c", voltageStr, modeChar);
+  lcd.setCursor(0, 0);
+  lcd.print(lineBuffer);
+
+  // Print right-aligned part
+  lcd.setCursor(20 - strlen(posStr), 0);
   lcd.print(posStr);
-  lcd.print(F("            "));
-  bool isLeft = (setPoint - input) > 0 && !isManualMode;
-  displayPositionGraph(isLeft);
+
+
+  // Line 1: Full-width bar graph
+  displayPositionGraph();
+
   lastDisplayedPosition = currentPosition;
   lastPositionUpdate = millis();
 }
@@ -1223,70 +1170,60 @@ void getMenuValueString(int idx, char* buffer) {
   }
 }
 
-void displayPositionGraph(bool isLeft) {
+void displayPositionGraph() {
+  lcd.setCursor(0, 1);
   if (fullTravelSteps <= 0) {
-    lcd.setCursor(0, 3);
-    lcd.print(F("                    "));
+    lcd.print(F("[NEEDS CALIBRATION!]"));
     return;
   }
   if (leftLimitState) {
-    lcd.setCursor(0, 3);
-    lcd.print("<LIMITA STANGA     ");
+    lcd.print(F("<<< LIMITA STANGA"));
     return;
-  } 
+  }
   if (rightLimitState) {
-    lcd.setCursor(0, 3);
-    lcd.print(">LIMITA DREAPTA    ");
+    lcd.print(F("LIMITA DREAPTA >>>"));
     return;
   }
-  lcd.setCursor(0, 3);
-  lcd.print("                    ");
-  for (int i = 0; i < 20; i++) {
-    lcd.setCursor(i, 3);
-    lcd.write((uint8_t)0);
-  }
-  lcd.setCursor(9, 3);
+
+  // Clear line 1
+  lcd.print(F("                    "));
+
+  // Re-draw center markers
+  lcd.setCursor(9, 1);
   lcd.write((uint8_t)6);
-  lcd.setCursor(10, 3);
+  lcd.setCursor(10, 1);
   lcd.write((uint8_t)7);
 
   long pos = currentPosition;
   long centerPos = fullTravelSteps / 2;
   long halfRange = fullTravelSteps / 2;
   if (halfRange <= 0) return;
+
   long distanceFromCenter = abs(pos - centerPos);
   long stepsPerChar = halfRange / 10;
   if (stepsPerChar <= 0) stepsPerChar = 1;
+
   int fullChars = (int)(distanceFromCenter / stepsPerChar);
   if (fullChars > 9) fullChars = 9;
+
   long remainder = distanceFromCenter % stepsPerChar;
   int partialFill = (int)map(remainder, 0, stepsPerChar, 0, 5);
+
   bool isLeftOfCenter = pos < centerPos;
   static bool lastDirection = true;
+
   if (isLeftOfCenter != lastDirection) {
     if (isLeftOfCenter) {
-      for (int i = 0; i < 8; i++) {
-        lcd.createChar(i, barChars[i]);
-      }
+      for (int i = 0; i < 8; i++) lcd.createChar(i, barChars[i]);
     } else {
-      for (int i = 0; i < 8; i++) {
-        lcd.createChar(i, barCharsMirrored[i]);
-      }
+      for (int i = 0; i < 8; i++) lcd.createChar(i, barCharsMirrored[i]);
     }
     lastDirection = isLeftOfCenter;
-    lcd.setCursor(9, 3);
-    lcd.write((uint8_t)6);
-    lcd.setCursor(10, 3);
-    lcd.write((uint8_t)7);
   }
+
   for (int i = 0; i < 10; i++) {
-    int lcdPos;
-    if (isLeftOfCenter) {
-      lcdPos = 9 - i;
-    } else {
-      lcdPos = 10 + i;
-    }
-    lcd.setCursor(lcdPos, 3);
+    int lcdPos = isLeftOfCenter ? (9 - i) : (10 + i);
+    lcd.setCursor(lcdPos, 1);
     if (i < fullChars) {
       lcd.write((uint8_t)5);
     } else if (i == fullChars) {
@@ -1325,17 +1262,13 @@ void setup() {
   pinMode(RIGHT_LED_PIN, OUTPUT);
   digitalWrite(LEFT_LED_PIN, LOW);
   digitalWrite(RIGHT_LED_PIN, LOW);
-  lcd.begin(20, 4);
+  lcd.begin(20, 2);
   delay(100);
   createBarGraphChars();
   lcd.setCursor(0, 0);
-  lcd.print(F(" WEB GUIDE CONTROL"));
+  lcd.print(F("WEB GUIDE V3.0"));
   lcd.setCursor(0, 1);
-  lcd.print(F("  FIRMWARE - V2.9.22"));  // Updated version with Marlin-like moves
-  lcd.setCursor(0, 2);
-  lcd.print(F("Designe by --------"));
-  lcd.setCursor(0, 3);
-  lcd.print(F(" for ------- S.R.L."));
+  lcd.print(F("Initializing..."));
   delay(2000);
   lcd.clear();
   delay(150);
@@ -1391,6 +1324,13 @@ void loop() {
   handleMenuSystem();
   handleToggleButton();
 
+  // Check for one-time clear event after homing
+  if (justFinishedHoming) {
+    lcd.clear();
+    updateMainDisplay();
+    justFinishedHoming = false;
+  }
+
   // Main operational logic only runs when not in menu/calib/centering
   if (menuState == NORMAL && calibState == CALIB_IDLE && !centeringActive) {
     if (isManualMode) {
@@ -1400,10 +1340,6 @@ void loop() {
       if (currentMillis - previousMillis >= interval) {
         previousMillis = currentMillis;
         input = readVoltage();
-        lcd.setCursor(0, 0);
-        lcd.print(F("Senzor: "));
-        lcd.print(input, 2);
-        lcd.print(F("V   "));
 
         double error = setPoint - input;
         bool inDeadband = abs(error) < deadband;
@@ -1447,12 +1383,6 @@ void loop() {
           }
         }
 
-        // Update display text
-        lcd.setCursor(0, 1);
-        bool isLeft = error > 0;
-        lcd.print(isLeft ? F("STANGA  << ") : F("DREAPTA >> "));
-        lcd.print(abs(error), 2);
-        lcd.print(F("V  "));
       }
 
       // These must run every loop for position-based control
@@ -1460,17 +1390,9 @@ void loop() {
       currentPosition = stepper.currentPosition();
       updateDirectionLEDsFromVelocity(stepper.speed());
 
-      // Update position and graph periodically
+      // Update main display periodically
       if (currentMillis - lastPositionUpdate >= POSITION_UPDATE_INTERVAL) {
-        if (currentPosition != lastDisplayedPosition) {
-          lcd.setCursor(0, 2);
-          lcd.print(F("POZITIE: "));
-          lcd.print(currentPosition);
-          lcd.print(F("    "));
-          lastDisplayedPosition = currentPosition;
-        }
-        lastPositionUpdate = currentMillis;
-        displayPositionGraph(setPoint - input > 0);
+        updateMainDisplay();
       }
     }
   }
@@ -1507,10 +1429,7 @@ void handleToggleButton() {
         myPID.SetMode(AUTOMATIC);
       }
       saveSettings();
-      if (menuState == NORMAL && calibState == CALIB_IDLE) {
-        lcd.setCursor(0, 1);
-        lcd.print(isManualMode ? F("CONTROL MANUAL      ") : F("AUTO MODE          "));
-      }
+      // The main loop will handle the display update.
     }
   }
   toggleButtonPrevState = toggleBtnState;
@@ -1554,16 +1473,6 @@ void handleManualButtons() {
 
   // Update display periodically
   if (now - lastPositionUpdate >= POSITION_UPDATE_INTERVAL) {
-    lcd.setCursor(0, 1);
-    lcd.print(F("CONTROL MANUAL      "));
-    if (currentPosition != lastDisplayedPosition) {
-      lcd.setCursor(0, 2);
-      lcd.print(F("POZITIE: "));
-      lcd.print(currentPosition);
-      lcd.print(F("    "));
-      lastDisplayedPosition = currentPosition;
-    }
-    displayPositionGraph(false);
-    lastPositionUpdate = now;
+    updateMainDisplay();
   }
 }
