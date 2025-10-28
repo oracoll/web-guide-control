@@ -1039,35 +1039,28 @@ void runCalibration() {
 // DISPLAY FUNCTIONS
 // ====================================================================
 void updateMainDisplay() {
-  // This function is now responsible for drawing the entire main screen.
-  // It avoids lcd.clear() for performance, redrawing line by line.
   char lineBuffer[21];
 
-  // Line 0: S:x.xxV M:A/M DIR
+  // Line 0: S:x.xxV M:A P:xxxxx
   char voltageStr[5];
   dtostrf(input, 4, 2, voltageStr);
   char modeChar = isManualMode ? 'M' : 'A';
-  const char* dirStr = "--";
-  if (isManualMode) {
-    if (stepper.speed() < 0) dirStr = "<<";
-    else if (stepper.speed() > 0) dirStr = ">>";
-  } else {
-    double error = setPoint - input;
-    if (abs(error) > deadband) {
-      if (error > 0) dirStr = "<<";
-      else dirStr = ">>";
-    }
-  }
-  sprintf(lineBuffer, "S:%sV M:%c %-2s      ", voltageStr, modeChar, dirStr);
+
+  // Create a right-aligned position string
+  char posStr[8];
+  sprintf(posStr, "P:%ld", currentPosition);
+
+  // Print left-aligned part
+  sprintf(lineBuffer, "S:%sV M:%c", voltageStr, modeChar);
   lcd.setCursor(0, 0);
   lcd.print(lineBuffer);
 
-  // Line 1: P:xxxxx [graph]
-  sprintf(lineBuffer, "P:%-7ld ", currentPosition);
-  lcd.setCursor(0, 1);
-  lcd.print(lineBuffer);
+  // Print right-aligned part
+  lcd.setCursor(20 - strlen(posStr), 0);
+  lcd.print(posStr);
 
-  lcd.setCursor(9, 1);
+
+  // Line 1: Full-width bar graph
   displayPositionGraph();
 
   lastDisplayedPosition = currentPosition;
@@ -1156,34 +1149,67 @@ void getMenuValueString(int idx, char* buffer) {
 }
 
 void displayPositionGraph() {
-  // Draws a 10-char graph: [........]
+  lcd.setCursor(0, 1);
   if (fullTravelSteps <= 0) {
-    lcd.print(F("[NO CALIB]"));
+    lcd.print(F("[NEEDS CALIBRATION!]"));
     return;
   }
   if (leftLimitState) {
-    lcd.print(F("[< LIMIT ]"));
+    lcd.print(F("<<< LIMITA STANGA"));
     return;
   }
   if (rightLimitState) {
-    lcd.print(F("[ LIMIT >]"));
+    lcd.print(F("LIMITA DREAPTA >>>"));
     return;
   }
 
-  lcd.print(F("["));
+  // Clear line 1
+  lcd.print(F("                    "));
 
-  // Map position (0 to fullTravelSteps) to a character position (0 to 7)
-  int charPos = map(currentPosition, 0, fullTravelSteps, 0, 7);
-  charPos = constrain(charPos, 0, 7);
+  // Re-draw center markers
+  lcd.setCursor(9, 1);
+  lcd.write((uint8_t)6);
+  lcd.setCursor(10, 1);
+  lcd.write((uint8_t)7);
 
-  for (int i = 0; i < 8; i++) {
-    if (i == charPos) {
-      lcd.write((uint8_t)5); // Solid block for current position
+  long pos = currentPosition;
+  long centerPos = fullTravelSteps / 2;
+  long halfRange = fullTravelSteps / 2;
+  if (halfRange <= 0) return;
+
+  long distanceFromCenter = abs(pos - centerPos);
+  long stepsPerChar = halfRange / 10;
+  if (stepsPerChar <= 0) stepsPerChar = 1;
+
+  int fullChars = (int)(distanceFromCenter / stepsPerChar);
+  if (fullChars > 9) fullChars = 9;
+
+  long remainder = distanceFromCenter % stepsPerChar;
+  int partialFill = (int)map(remainder, 0, stepsPerChar, 0, 5);
+
+  bool isLeftOfCenter = pos < centerPos;
+  static bool lastDirection = true;
+
+  if (isLeftOfCenter != lastDirection) {
+    if (isLeftOfCenter) {
+      for (int i = 0; i < 8; i++) lcd.createChar(i, barChars[i]);
     } else {
-      lcd.print(F(" "));
+      for (int i = 0; i < 8; i++) lcd.createChar(i, barCharsMirrored[i]);
+    }
+    lastDirection = isLeftOfCenter;
+  }
+
+  for (int i = 0; i < 10; i++) {
+    int lcdPos = isLeftOfCenter ? (9 - i) : (10 + i);
+    lcd.setCursor(lcdPos, 1);
+    if (i < fullChars) {
+      lcd.write((uint8_t)5);
+    } else if (i == fullChars) {
+      lcd.write((uint8_t)partialFill);
+    } else {
+      lcd.write((uint8_t)0);
     }
   }
-  lcd.print(F("]"));
 }
 
 bool updateLimitSwitch(int pin, unsigned long& debounceTime, bool& lastState) {
