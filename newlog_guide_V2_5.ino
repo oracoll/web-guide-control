@@ -281,20 +281,6 @@ void createBarGraphChars() {
 }
 
 // ====================================================================
-// NEW: CENTER BUTTON HANDLING
-// ====================================================================
-void handleCenterButton() {
-  bool centerBtnState = digitalRead(CENTER_BUTTON_PIN);
-  if (centerBtnState == LOW && centerButtonPrevState == HIGH) {
-    if (menuState == NORMAL && calibState == CALIB_IDLE && !centeringActive) {
-      if (fullTravelSteps > 0 && !leftLimitState && !rightLimitState) {
-        startCentering();
-      }
-    }
-  }
-  centerButtonPrevState = centerBtnState;
-}
-// ====================================================================
 // MOTOR CURRENT CONTROL
 // ====================================================================
 void setMotorCurrent() {
@@ -566,100 +552,6 @@ void runCentering() {
   }
 }
 
-// ====================================================================
-// NEW: SET/MENU BUTTON HANDLING
-// ====================================================================
-void handleSetMenuButton() {
-  bool encBtnState = digitalRead(SET_MENU_BUTTON_PIN);
-  unsigned long now = millis();
-
-  if (encBtnState == LOW && encoderButtonPrevState == HIGH) {
-    encoderButtonDownTime = now;
-  } else if (encBtnState == HIGH && encoderButtonPrevState == LOW) {
-    unsigned long held = now - encoderButtonDownTime;
-
-    if (held >= LONG_PRESS_MS) {
-      // Long press: Enter or Exit Menu
-      if (menuState == NORMAL) {
-        menuState = MENU_BROWSE;
-        lastMenuTopItem = -1;
-        lastCurrentMenuItem = -1;
-        for (int i = 0; i < numMenuItems; i++) {
-          lastMenuValues[i] = 0x7fffffffffffffffLL;
-        }
-        lcd.clear();
-        delay(150);
-        drawMenu();
-      } else {
-        menuState = NORMAL;
-        lcd.clear();
-        delay(150);
-        updateMainDisplay();
-        displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
-      }
-    } else if (held >= SHORT_PRESS_MS) {
-      // Short press: Select/confirm
-      if (menuState == MENU_BROWSE) {
-        if (currentMenuItem == 11) { // Calib Steps
-          menuState = MENU_CALIB;
-          calibState = CALIB_INIT;
-          currentCalibMenuItem = 0;
-          lastCalibMenuItem = -1;
-          lcd.clear();
-          delay(150);
-        } else if (currentMenuItem == numMenuItems - 1) { // EXIT MENU
-          menuState = MENU_EXIT_CONFIRM;
-          currentCalibMenuItem = 0;
-          lastCalibMenuItem = -1;
-          lcd.clear();
-          delay(150);
-        } else if (isNumericItem(currentMenuItem)) {
-          menuState = MENU_DIGIT_EDIT;
-          getMenuValueString(currentMenuItem, editValueStr);
-          currentDigitPos = 0;
-          blinkTimer = millis();
-          blinkState = true;
-        } else if (isToggleItem(currentMenuItem)) {
-          menuState = MENU_EDIT;
-        }
-      } else if (menuState == MENU_EDIT) {
-        menuState = MENU_BROWSE;
-        saveSettings();
-        lastMenuTopItem = -1;
-        lastCurrentMenuItem = -1;
-      } else if (menuState == MENU_DIGIT_EDIT) {
-        do {
-          currentDigitPos++;
-          if (editValueStr[currentDigitPos] == '\0') {
-            parseEditedValue(currentMenuItem);
-            menuState = MENU_BROWSE;
-            saveSettings();
-            lastMenuTopItem = -1;
-            lastCurrentMenuItem = -1;
-            break;
-          }
-        } while (!(isdigit(editValueStr[currentDigitPos]) || editValueStr[currentDigitPos] == '_'));
-      } else if (menuState == MENU_EXIT_CONFIRM) {
-        if (currentCalibMenuItem == 0) { // Save
-          saveSettings();
-          menuState = NORMAL;
-          lcd.clear();
-          delay(150);
-          updateMainDisplay();
-          displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
-        } else { // Cancel
-          menuState = MENU_BROWSE;
-          lastMenuTopItem = -1;
-          lastCurrentMenuItem = -1;
-          lcd.clear();
-          delay(150);
-          drawMenu();
-        }
-      }
-    }
-  }
-  encoderButtonPrevState = encBtnState;
-}
 
 // ====================================================================
 // LED CONTROL
@@ -1592,6 +1484,110 @@ void handleToggleButton() {
     }
   }
   toggleButtonPrevState = toggleBtnState;
+}
+
+void handleCenterButton() {
+  bool centerBtnState = digitalRead(CENTER_BUTTON_PIN);
+  if (centerBtnState == LOW && centerButtonPrevState == HIGH) {
+    if (menuState == NORMAL && calibState == CALIB_IDLE && !centeringActive) {
+      if (fullTravelSteps > 0 && !leftLimitState && !rightLimitState) {
+        startCentering();
+      }
+    }
+  }
+  centerButtonPrevState = centerBtnState;
+}
+
+void handleSetMenuButton() {
+  bool encBtnState = digitalRead(SET_MENU_BUTTON_PIN);
+  unsigned long now = millis();
+
+  if (encBtnState == LOW && encoderButtonPrevState == HIGH) {
+    encoderButtonDownTime = now;
+  } else if (encBtnState == HIGH && encoderButtonPrevState == LOW) {
+    unsigned long held = now - encoderButtonDownTime;
+
+    if (held >= LONG_PRESS_MS) {
+      // Long press: Enter or Exit Menu
+      if (menuState == NORMAL) {
+        menuState = MENU_BROWSE;
+        lastMenuTopItem = -1;
+        lastCurrentMenuItem = -1;
+        for (int i = 0; i < numMenuItems; i++) {
+          lastMenuValues[i] = 0x7fffffffffffffffLL;
+        }
+        lcd.clear();
+        delay(150);
+        drawMenu();
+      } else {
+        menuState = NORMAL;
+        lcd.clear();
+        delay(150);
+        updateMainDisplay();
+        displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
+      }
+    } else if (held >= SHORT_PRESS_MS) {
+      // Short press: Select/confirm
+      if (menuState == MENU_BROWSE) {
+        if (currentMenuItem == 11) { // Calib Steps
+          menuState = MENU_CALIB;
+          calibState = CALIB_INIT;
+          currentCalibMenuItem = 0;
+          lastCalibMenuItem = -1;
+          lcd.clear();
+          delay(150);
+        } else if (currentMenuItem == numMenuItems - 1) { // EXIT MENU
+          menuState = MENU_EXIT_CONFIRM;
+          currentCalibMenuItem = 0;
+          lastCalibMenuItem = -1;
+          lcd.clear();
+          delay(150);
+        } else if (isNumericItem(currentMenuItem)) {
+          menuState = MENU_DIGIT_EDIT;
+          getMenuValueString(currentMenuItem, editValueStr);
+          currentDigitPos = 0;
+          blinkTimer = millis();
+          blinkState = true;
+        } else if (isToggleItem(currentMenuItem)) {
+          menuState = MENU_EDIT;
+        }
+      } else if (menuState == MENU_EDIT) {
+        menuState = MENU_BROWSE;
+        saveSettings();
+        lastMenuTopItem = -1;
+        lastCurrentMenuItem = -1;
+      } else if (menuState == MENU_DIGIT_EDIT) {
+        do {
+          currentDigitPos++;
+          if (editValueStr[currentDigitPos] == '\0') {
+            parseEditedValue(currentMenuItem);
+            menuState = MENU_BROWSE;
+            saveSettings();
+            lastMenuTopItem = -1;
+            lastCurrentMenuItem = -1;
+            break;
+          }
+        } while (!(isdigit(editValueStr[currentDigitPos]) || editValueStr[currentDigitPos] == '_'));
+      } else if (menuState == MENU_EXIT_CONFIRM) {
+        if (currentCalibMenuItem == 0) { // Save
+          saveSettings();
+          menuState = NORMAL;
+          lcd.clear();
+          delay(150);
+          updateMainDisplay();
+          displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
+        } else { // Cancel
+          menuState = MENU_BROWSE;
+          lastMenuTopItem = -1;
+          lastCurrentMenuItem = -1;
+          lcd.clear();
+          delay(150);
+          drawMenu();
+        }
+      }
+    }
+  }
+  encoderButtonPrevState = encBtnState;
 }
 
 bool readStableButtonState(int pin) {
