@@ -223,6 +223,7 @@ const unsigned long LIMIT_DEBOUNCE_MS = 50;
 
 unsigned long displayLockoutUntil = 0;
 const unsigned long DISPLAY_LOCKOUT_MS = 500;
+bool centeringActive = false;
 
 // ====================================================================
 // EEPROM CONFIGURATION
@@ -523,8 +524,6 @@ void runHomingSequence() {
 // ====================================================================
 // CENTERING FUNCTION - Marlin G0 to center
 // ====================================================================
-bool centeringActive = false;
-
 void startCentering() {
   if (fullTravelSteps > 0 && !leftLimitState && !rightLimitState) {
     centeringActive = true;
