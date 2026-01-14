@@ -57,6 +57,10 @@ const char STR_NEEDS_CALIBRATION[] PROGMEM = "[NEEDS CALIBRATION!]";
 const char STR_LEFT_LIMIT_ROMANIAN[] PROGMEM = "<<< LIMITA STANGA";
 const char STR_RIGHT_LIMIT_ROMANIAN[] PROGMEM = "LIMITA DREAPTA >>>";
 const char STR_PRESS_SET_MENU[] PROGMEM = "Press SET for menu";
+const char STR_CENTER_NOT_FOUND[] PROGMEM = "Center not found";
+const char STR_HOMING_TO_LEFT[] PROGMEM = "Homing to left...";
+const char STR_EDGE_NOT_FOUND[] PROGMEM = "Edge not found!";
+
 
 // ====================================================================
 // MOTOR CONFIGURATION - Grouped related constants
@@ -1194,9 +1198,9 @@ void runSmartCentering() {
     // START FALLBACK HOMING
     lcd.clear();
     lcd.setCursor(0, 0);
-    lcd.print(F("Center not found"));
+    lcdPrint_P(STR_CENTER_NOT_FOUND);
     lcd.setCursor(0, 1);
-    lcd.print(F("Homing to left..."));
+    lcdPrint_P(STR_HOMING_TO_LEFT);
     delay(1500);
     homeToLeft = true;
     homingState = HOMING_INIT;
@@ -1295,9 +1299,9 @@ void runSmartCentering() {
         // START FALLBACK HOMING
         lcd.clear();
         lcd.setCursor(0, 0);
-        lcd.print(F("Edge not found!"));
+        lcdPrint_P(STR_EDGE_NOT_FOUND);
         lcd.setCursor(0, 1);
-        lcd.print(F("Homing to left..."));
+        lcdPrint_P(STR_HOMING_TO_LEFT);
         delay(1500);
         homeToLeft = true;
         homingState = HOMING_INIT;
@@ -2606,6 +2610,7 @@ void setup() {
   
   stepper.setMaxSpeed(stepperMaxSpeed);
   stepper.setAcceleration(stepperAcceleration);
+  stepper.setPinsInverted(true, false, false);
   myPID.SetMode(AUTOMATIC);
   myPID.SetOutputLimits(-stepperMaxSpeed, stepperMaxSpeed);
   myPID.SetSampleTime(20);
@@ -2618,6 +2623,15 @@ void setup() {
   
   // ===== MANDATORY STARTUP CENTERING =====
   if (fullTravelSteps > 0) {
+    // Check limits to set initial position before centering
+    leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
+    rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
+    if (leftLimitState && !rightLimitState) {
+      stepper.setCurrentPosition(0);
+    } else if (rightLimitState && !leftLimitState) {
+      stepper.setCurrentPosition(fullTravelSteps);
+    }
+
     // Calibration exists, so we must find the center.
     lcd.clear();
     lcd.setCursor(0, 0);
