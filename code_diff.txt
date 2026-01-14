@@ -1,0 +1,298 @@
+--- 20x2_LCD_newlong_v3_10_13_1_2026/20x2_LCD_newlong_v3_10_13_1_2026.ino	2026-01-14 11:34:24.428110100 +0000
++++ working_code.ino	2026-01-14 11:38:11.232686931 +0000
+@@ -57,6 +57,10 @@
+ const char STR_LEFT_LIMIT_ROMANIAN[] PROGMEM = "<<< LIMITA STANGA";
+ const char STR_RIGHT_LIMIT_ROMANIAN[] PROGMEM = "LIMITA DREAPTA >>>";
+ const char STR_PRESS_SET_MENU[] PROGMEM = "Press SET for menu";
++const char STR_CENTER_NOT_FOUND[] PROGMEM = "Center not found";
++const char STR_HOMING_TO_LEFT[] PROGMEM = "Homing to left...";
++const char STR_EDGE_NOT_FOUND[] PROGMEM = "Edge not found!";
++
+
+ // ====================================================================
+ // MOTOR CONFIGURATION - Grouped related constants
+@@ -268,7 +272,7 @@
+ // ====================================================================
+ // HOMING STATE
+ // ====================================================================
+-enum HomingState { HOMING_IDLE, HOMING_INIT, HOMING_LEFT, HOMING_RIGHT, HOMING_CENTER, HOMING_COMPLETE };
++enum HomingState { HOMING_IDLE, HOMING_INIT, HOMING_LEFT, HOMING_RIGHT, HOMING_CENTER, HOMING_COMPLETE, HOMING_ERROR };
+ HomingState homingState = HOMING_IDLE;
+ bool homingDone = false;
+ bool homeToLeft = true;
+@@ -865,10 +869,10 @@
+           lcd.print(F("Reversing..."));
+           delay(1000);
+           homeToLeft = false;  // Reverse direction
+-          stepper.setSpeed(homingSpeed);
++          stepper.setSpeed(-homingSpeed);
+           homingState = HOMING_RIGHT;
+         } else {
+-          stepper.setSpeed(-homingSpeed);
++          stepper.setSpeed(homingSpeed);
+           homingState = HOMING_LEFT;
+         }
+       } else {
+@@ -884,10 +888,10 @@
+           lcd.print(F("Reversing..."));
+           delay(1000);
+           homeToLeft = true;  // Reverse direction
+-          stepper.setSpeed(-homingSpeed);
++          stepper.setSpeed(homingSpeed);
+           homingState = HOMING_LEFT;
+         } else {
+-          stepper.setSpeed(homingSpeed);
++          stepper.setSpeed(-homingSpeed);
+           homingState = HOMING_RIGHT;
+         }
+       }
+@@ -895,10 +899,8 @@
+
+     case HOMING_LEFT:
+       if (timeout) {
+-        lcd.setCursor(0, 1);
+-        lcdPrint_P(STR_TIMEOUT);
+-        delay(1000);
+-        homingState = HOMING_COMPLETE;
++        stepper.stop();
++        homingState = HOMING_ERROR;
+         break;
+       }
+       leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
+@@ -942,10 +944,8 @@
+
+     case HOMING_RIGHT:
+       if (timeout) {
+-        lcd.setCursor(0, 1);
+-        lcdPrint_P(STR_TIMEOUT);
+-        delay(1000);
+-        homingState = HOMING_COMPLETE;
++        stepper.stop();
++        homingState = HOMING_ERROR;
+         break;
+       }
+       rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
+@@ -988,14 +988,12 @@
+       break;
+
+     case HOMING_CENTER:
+-  if (timeout) {
+-    lcd.setCursor(0, 1);
+-    lcdPrint_P(STR_TIMEOUT);
+-    delay(1000);
+-    homingState = HOMING_COMPLETE;
+-    break;
+-  }
+-  stepper.run();
++      if (timeout) {
++        stepper.stop();
++        homingState = HOMING_ERROR;
++        break;
++      }
++      stepper.run();
+   if (stepper.distanceToGo() == 0) {
+     currentPosition = stepper.currentPosition();
+
+@@ -1031,6 +1029,19 @@
+       verifyPositionAfterHoming();
+       break;
+
++    case HOMING_ERROR:
++      lcd.clear();
++      lcd.setCursor(0, 0);
++      lcdPrint_P(STR_HOMING_ERROR);
++      lcd.setCursor(0, 1);
++      lcdPrint_P(STR_TIMEOUT);
++
++      // Stay in this error state until the system is reset or user intervenes
++      homingState = HOMING_IDLE; // Prevent re-triggering error
++      homingDone = false;       // Critical: do not allow operation
++      showSystemError();
++      break;
++
+     default:
+       break;
+   }
+@@ -1184,15 +1195,16 @@
+     centeringActive = false;
+     centeringState = CENTERING_IDLE;
+
+-    // Re-enable PID if in auto mode
+-    if (!isManualMode) {
+-      myPID.SetMode(AUTOMATIC);
+-    }
+-
++    // START FALLBACK HOMING
+     lcd.clear();
+-    lcdPrint_P(STR_CENTER_TIMEOUT);
+-    delay(1000);
+-    updateMainDisplay();
++    lcd.setCursor(0, 0);
++    lcdPrint_P(STR_CENTER_NOT_FOUND);
++    lcd.setCursor(0, 1);
++    lcdPrint_P(STR_HOMING_TO_LEFT);
++    delay(1500);
++    homeToLeft = true;
++    homingState = HOMING_INIT;
++    homingDone = false;
+     return;
+   }
+
+@@ -1284,15 +1296,17 @@
+         centeringActive = false;
+         centeringState = CENTERING_IDLE;
+
+-        // Re-enable PID if in auto mode
+-        if (!isManualMode) {
+-          myPID.SetMode(AUTOMATIC);
+-        }
+-
++        // START FALLBACK HOMING
+         lcd.clear();
+-        lcd.print(F("Edge not found!"));
++        lcd.setCursor(0, 0);
++        lcdPrint_P(STR_EDGE_NOT_FOUND);
++        lcd.setCursor(0, 1);
++        lcdPrint_P(STR_HOMING_TO_LEFT);
+         delay(1500);
+-        updateMainDisplay();
++        homeToLeft = true;
++        homingState = HOMING_INIT;
++        homingDone = false;
++        return; // Exit to allow homing to take over
+       }
+       break;
+
+@@ -1698,7 +1712,7 @@
+       lcd.setCursor(0, 1);
+       lcd.print(F("Finding Left Limit"));
+       calibTimer = currentMillis;
+-      stepper.setSpeed(-calibSpeed);
++      stepper.setSpeed(calibSpeed);
+       calibState = CALIB_MOVE_LEFT;
+       break;
+
+@@ -1755,7 +1769,7 @@
+         if (held >= AUTO_BUTTON_DEBOUNCE_MS && held < SET_BUTTON_LONG_PRESS_MS) {
+           if (currentCalibMenuItem == 0) {
+             calibTimer = currentMillis;
+-            stepper.setSpeed(calibSpeed);
++            stepper.setSpeed(-calibSpeed);
+             digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
+             digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
+             digitalWrite(CENTER_LED_PIN, LOW);
+@@ -2596,6 +2610,7 @@
+
+   stepper.setMaxSpeed(stepperMaxSpeed);
+   stepper.setAcceleration(stepperAcceleration);
++  stepper.setPinsInverted(true, false, false);
+   myPID.SetMode(AUTOMATIC);
+   myPID.SetOutputLimits(-stepperMaxSpeed, stepperMaxSpeed);
+   myPID.SetSampleTime(20);
+@@ -2606,76 +2621,37 @@
+   voltageReadTimer = millis();
+   wdt_enable(WDTO_4S);
+
+-  // ===== STARTUP HOMING CHECK =====
+-  bool needHoming = false;
+-
+-  // If no calibration data, do NOT home - let user calibrate first
+-  if (fullTravelSteps <= 0) {
+-    needHoming = false;
+-    showSystemError();
+-  }
+-  else {
+-    // We have calibration data - check if homing is needed
++  // ===== MANDATORY STARTUP CENTERING =====
++  if (fullTravelSteps > 0) {
++    // Check limits to set initial position before centering
+     leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
+     rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
+-
+-    // ONLY home if physically at a limit switch
+     if (leftLimitState && !rightLimitState) {
+-      // At left limit - home to establish reference
+-      needHoming = true;
+-      homeToLeft = true;
+-      lcd.clear();
+-      lcd.setCursor(0, 0);
+-      lcd.print(F("At Left Limit"));
+-      lcd.setCursor(0, 1);
+-      lcd.print(F("Homing..."));
+-      delay(1500);
++      stepper.setCurrentPosition(0);
++    } else if (rightLimitState && !leftLimitState) {
++      stepper.setCurrentPosition(fullTravelSteps);
+     }
+-    else if (rightLimitState && !leftLimitState) {
+-      // At right limit - home to establish reference
+-      needHoming = true;
+-      homeToLeft = false;
+-      lcd.clear();
+-      lcd.setCursor(0, 0);
+-      lcd.print(F("At Right Limit"));
+-      lcd.setCursor(0, 1);
+-      lcd.print(F("Homing..."));
+-      delay(1500);
+-    }
+-    else if (leftLimitState && rightLimitState) {
+-      // Both limits triggered - sensor error, must home
+-      needHoming = true;
+-      homeToLeft = true;
+-      lcd.clear();
+-      lcd.setCursor(0, 0);
+-      lcd.print(F("Sensor Error!"));
+-      lcd.setCursor(0, 1);
+-      lcd.print(F("Homing..."));
+-      delay(1500);
+-    }
+-    // NO OTHER CONDITIONS - position unknown but not at limit?
+-    // User must manually home from menu
+-  }
+-
+-  // ===== EXECUTE HOMING IF NEEDED =====
+-  if (needHoming) {
+-    homingState = HOMING_INIT;
+-    homingDone = false;
+-    if (!(fullTravelSteps <= 0)) {
+-      lcd.clear();
+-      lcd.setCursor(0, 0);
+-      lcdPrint_P(STR_AUTO_HOMING);
+-      delay(1000);
+-    }
+-  }
+-  else {
++
++    // Calibration exists, so we must find the center.
++    lcd.clear();
++    lcd.setCursor(0, 0);
++    lcd.print(F("System Start"));
++    lcd.setCursor(0, 1);
++    lcd.print(F("Centering..."));
++    delay(1500);
++
++    // Set homingDone to true to allow centering to start
+     homingDone = true;
++    startSmartCentering();
++  } else {
++    // No calibration data. User must calibrate manually.
++    showSystemError();
++    homingDone = false; // Prevent operations until calibrated
+     homingState = HOMING_IDLE;
+-    updateMainDisplay();
+-    }
++  }
+
+
+-}  // *** END OF setup() ***
++}  // *** END OF loop() ***
+
+ // ====================================================================
+ // MAIN LOOP — POSITION-BASED CONTROL IN ALL MODES
+@@ -2945,4 +2921,4 @@
+ void resetEncoderPosition() {
+   lastEncoderPos = myEnc.read();
+   lastHandledEncoderPos = myEnc.read();
+-}
+\ No newline at end of file
++}
