@@ -869,10 +869,10 @@ void runHomingSequence() {
           lcd.print(F("Reversing..."));
           delay(1000);
           homeToLeft = false;  // Reverse direction
-          stepper.setSpeed(homingSpeed);
+          stepper.setSpeed(-homingSpeed);
           homingState = HOMING_RIGHT;
         } else {
-          stepper.setSpeed(-homingSpeed);
+          stepper.setSpeed(homingSpeed);
           homingState = HOMING_LEFT;
         }
       } else {
@@ -888,10 +888,10 @@ void runHomingSequence() {
           lcd.print(F("Reversing..."));
           delay(1000);
           homeToLeft = true;  // Reverse direction
-          stepper.setSpeed(-homingSpeed);
+          stepper.setSpeed(homingSpeed);
           homingState = HOMING_LEFT;
         } else {
-          stepper.setSpeed(homingSpeed);
+          stepper.setSpeed(-homingSpeed);
           homingState = HOMING_RIGHT;
         }
       }
@@ -1712,7 +1712,7 @@ void runCalibration() {
       lcd.setCursor(0, 1);
       lcd.print(F("Finding Left Limit"));
       calibTimer = currentMillis;
-      stepper.setSpeed(-calibSpeed);
+      stepper.setSpeed(calibSpeed);
       calibState = CALIB_MOVE_LEFT;
       break;
 
@@ -1769,7 +1769,7 @@ void runCalibration() {
         if (held >= AUTO_BUTTON_DEBOUNCE_MS && held < SET_BUTTON_LONG_PRESS_MS) {
           if (currentCalibMenuItem == 0) {
             calibTimer = currentMillis;
-            stepper.setSpeed(calibSpeed);
+            stepper.setSpeed(-calibSpeed);
             digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
             digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
             digitalWrite(CENTER_LED_PIN, LOW);
