@@ -106,14 +106,22 @@ LiquidCrystal lcd(33, 35, 37, 39, 41, 43);
 // ENCODER CONFIGURATION
 // ====================================================================
 Encoder myEnc(3, 2);              
-#define ENCODER_SW 4              
+#define CENTER_BUTTON_PIN 4
+#define SET_MENU_BUTTON_PIN 26
 
 // ====================================================================
 // STEPPER MOTOR CONFIGURATION
 // ====================================================================
-#define STEP_PIN 13               
-#define DIRECTION_PIN 12          
+#define STEP_PIN 11
+#define DIRECTION_PIN 12
 AccelStepper stepper(AccelStepper::DRIVER, STEP_PIN, DIRECTION_PIN);
+// --- NEW: Current Control Pin Definitions ---
+#define C0_PIN 13   // Current control bit 0
+#define C1_PIN 10   // Current control bit 1
+
+// Motor Current Setting
+const int MOTOR_CURRENT_DEFAULT = 2; // Default is 100%
+int motorCurrentLevel = MOTOR_CURRENT_DEFAULT; // 0=0%, 1=50%, 2=100%, 3=150%
 
 // ====================================================================
 // LIMIT SWITCHES
@@ -172,8 +180,8 @@ const int LCD_MENU_ROWS = 4;
 const char* menuItems[] = {
   "PID Kp", "PID Ki", "PID Kd", "PID Direction", "Sensor SetPoint",
   "Deadband", "Operation Mode", "Min Speed", "Max Speed",
-  "Homing Speed", "Auto Speed", "Calib Steps", "Manual Factor", 
-  "Manual Fac SW", "Acceleration", "Btn Hold Int", "Dyn Speed %", "EXIT MENU"
+  "Homing Speed", "Auto Speed", "Calib Steps", "Manual Factor",
+  "Manual Fac SW", "Acceleration", "Btn Hold Int", "Dyn Speed %", "Motor Current", "EXIT MENU"
 };
 const int numMenuItems = sizeof(menuItems) / sizeof(menuItems[0]);
 long lastMenuValues[20];
@@ -200,6 +208,7 @@ unsigned long lastPositionUpdate = 0;
 const unsigned long POSITION_UPDATE_INTERVAL = 300;
 unsigned long encoderButtonDownTime = 0;
 bool encoderButtonPrevState = HIGH;
+bool centerButtonPrevState = HIGH; // For edge detection
 const unsigned long LONG_PRESS_MS = 1000;
 const unsigned long SHORT_PRESS_MS = 50;
 long lastEncoderPos = 0;
@@ -214,6 +223,7 @@ const unsigned long LIMIT_DEBOUNCE_MS = 50;
 
 unsigned long displayLockoutUntil = 0;
 const unsigned long DISPLAY_LOCKOUT_MS = 500;
+bool centeringActive = false;
 
 // ====================================================================
 // EEPROM CONFIGURATION
@@ -236,6 +246,7 @@ struct Settings {
   int stepperAcceleration;
   int buttonHoldInterval;
   float dynamicSpeedFactor;
+  int motorCurrentLevel;
   uint16_t checksum;
 };
 const int EEPROM_ADDRESS = 0;
@@ -264,9 +275,33 @@ uint8_t barCharsMirrored[8][8] = {
   {0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000}
 };
 
-void createBarGraphChars() { 
+void createBarGraphChars() {
   for (int i = 0; i < 8; i++) {
-    lcd.createChar(i, barChars[i]); 
+    lcd.createChar(i, barChars[i]);
+  }
+}
+
+// ====================================================================
+// MOTOR CURRENT CONTROL
+// ====================================================================
+void setMotorCurrent() {
+  switch (motorCurrentLevel) {
+    case 0: // 0%
+      digitalWrite(C0_PIN, LOW);
+      digitalWrite(C1_PIN, LOW);
+      break;
+    case 1: // 50%
+      digitalWrite(C0_PIN, HIGH);
+      digitalWrite(C1_PIN, LOW);
+      break;
+    case 2: // 100%
+      digitalWrite(C0_PIN, LOW);
+      digitalWrite(C1_PIN, HIGH);
+      break;
+    case 3: // 150%
+      digitalWrite(C0_PIN, HIGH);
+      digitalWrite(C1_PIN, HIGH);
+      break;
   }
 }
 
@@ -296,6 +331,9 @@ void updateDirectionLEDsFromVelocity(float speed);
 bool readStableButtonState(int pin);
 void startCentering();
 void runHomingSequence();  // Marlin-like homing
+void setMotorCurrent();
+void handleCenterButton();
+void handleSetMenuButton();
 
 // ====================================================================
 // EEPROM FUNCTIONS
@@ -313,9 +351,9 @@ void saveSettings() {
   Settings settings = {
     (float)Kp, (float)Ki, (float)Kd, pidDirection, (float)setPoint,
     (float)deadband, isManualMode, stepperMinSpeed, stepperMaxSpeed,
-    homingSpeed, autoModeSpeed, fullTravelSteps, stepManualFactor, 
-    stepManualFactorSW, stepperAcceleration, buttonHoldInterval, 
-    dynamicSpeedFactor, 0
+    homingSpeed, autoModeSpeed, fullTravelSteps, stepManualFactor,
+    stepManualFactorSW, stepperAcceleration, buttonHoldInterval,
+    dynamicSpeedFactor, motorCurrentLevel, 0
   };
   settings.checksum = calculateChecksum(settings);
   wdt_reset();
@@ -347,6 +385,7 @@ void loadSettings() {
     stepperAcceleration = STEPPER_ACCELERATION_DEFAULT;
     buttonHoldInterval = BUTTON_HOLD_INTERVAL_DEFAULT;
     dynamicSpeedFactor = DYNAMIC_SPEED_FACTOR_DEFAULT;
+    motorCurrentLevel = MOTOR_CURRENT_DEFAULT;
   } else {
     Kp = (isnan(settings.Kp) || settings.Kp < KP_MIN || settings.Kp > KP_MAX) ? KP_DEFAULT : settings.Kp;
     Ki = (isnan(settings.Ki) || settings.Ki < KI_MIN || settings.Ki > KI_MAX) ? KI_DEFAULT : settings.Ki;
@@ -365,6 +404,7 @@ void loadSettings() {
     stepperAcceleration = (settings.stepperAcceleration < STEPPER_ACCELERATION_MIN || settings.stepperAcceleration > STEPPER_ACCELERATION_MAX) ? STEPPER_ACCELERATION_DEFAULT : settings.stepperAcceleration;
     buttonHoldInterval = (settings.buttonHoldInterval < BUTTON_HOLD_INTERVAL_MIN || settings.buttonHoldInterval > BUTTON_HOLD_INTERVAL_MAX) ? BUTTON_HOLD_INTERVAL_DEFAULT : settings.buttonHoldInterval;
     dynamicSpeedFactor = (isnan(settings.dynamicSpeedFactor) || settings.dynamicSpeedFactor < DYNAMIC_SPEED_FACTOR_MIN || settings.dynamicSpeedFactor > DYNAMIC_SPEED_FACTOR_MAX) ? DYNAMIC_SPEED_FACTOR_DEFAULT : settings.dynamicSpeedFactor;
+    motorCurrentLevel = (settings.motorCurrentLevel < 0 || settings.motorCurrentLevel > 3) ? MOTOR_CURRENT_DEFAULT : settings.motorCurrentLevel;
   }
   myPID.SetTunings(Kp, Ki, Kd);
   myPID.SetControllerDirection(pidDirection);
@@ -484,8 +524,6 @@ void runHomingSequence() {
 // ====================================================================
 // CENTERING FUNCTION - Marlin G0 to center
 // ====================================================================
-bool centeringActive = false;
-
 void startCentering() {
   if (fullTravelSteps > 0 && !leftLimitState && !rightLimitState) {
     centeringActive = true;
@@ -512,6 +550,7 @@ void runCentering() {
     updateDirectionLEDsFromVelocity(speed);
   }
 }
+
 
 // ====================================================================
 // LED CONTROL
@@ -550,7 +589,7 @@ bool isNumericItem(int idx) {
 
 bool isToggleItem(int idx) {
   switch(idx) {
-    case 3: case 6: return true;
+    case 3: case 6: case 17: return true;
     default: return false;
   }
 }
@@ -611,95 +650,7 @@ void handleMenuSystem() {
     }
   }
 
-  bool encBtnState = digitalRead(ENCODER_SW);
-  unsigned long now = millis();
-  if (encBtnState == LOW && encoderButtonPrevState == HIGH) {
-    encoderButtonDownTime = now;
-  } else if (encBtnState == HIGH && encoderButtonPrevState == LOW) {
-    unsigned long held = now - encoderButtonDownTime;
-    if (held >= LONG_PRESS_MS) {
-      if (menuState == NORMAL) {
-        menuState = MENU_BROWSE;
-        lastMenuTopItem = -1;
-        lastCurrentMenuItem = -1;
-        for (int i = 0; i < numMenuItems; i++) {
-          lastMenuValues[i] = 0x7fffffffffffffffLL;
-        }
-        lcd.clear();
-        delay(150);
-        drawMenu();
-      } else {
-        menuState = NORMAL;
-        lcd.clear();
-        delay(150);
-        updateMainDisplay();
-        displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
-      }
-    } else if (held >= SHORT_PRESS_MS) {
-      if (menuState == MENU_BROWSE) {
-        if (currentMenuItem == 11) {
-          menuState = MENU_CALIB;
-          calibState = CALIB_INIT;
-          currentCalibMenuItem = 0;
-          lastCalibMenuItem = -1;
-          lcd.clear();
-          delay(150);
-        } else if (currentMenuItem == numMenuItems - 1) {
-          menuState = MENU_EXIT_CONFIRM;
-          currentCalibMenuItem = 0;
-          lastCalibMenuItem = -1;
-          lcd.clear();
-          delay(150);
-        } else if (isNumericItem(currentMenuItem)) {
-          menuState = MENU_DIGIT_EDIT;
-          getMenuValueString(currentMenuItem, editValueStr);
-          currentDigitPos = 0;
-          blinkTimer = millis();
-          blinkState = true;
-        } else if (isToggleItem(currentMenuItem)) {
-          menuState = MENU_EDIT;
-        }
-      } else if (menuState == MENU_EDIT) {
-        menuState = MENU_BROWSE;
-        saveSettings();
-        lastMenuTopItem = -1;
-        lastCurrentMenuItem = -1;
-      } else if (menuState == MENU_DIGIT_EDIT) {
-        do {
-          currentDigitPos++;
-          if (editValueStr[currentDigitPos] == '\0') {
-            parseEditedValue(currentMenuItem);
-            menuState = MENU_BROWSE;
-            saveSettings();
-            lastMenuTopItem = -1;
-            lastCurrentMenuItem = -1;
-            break;
-          }
-        } while (!(isdigit(editValueStr[currentDigitPos]) || editValueStr[currentDigitPos] == '_'));
-      } else if (menuState == MENU_EXIT_CONFIRM) {
-        if (currentCalibMenuItem == 0) {
-          saveSettings();
-          menuState = NORMAL;
-          lcd.clear();
-          delay(150);
-          updateMainDisplay();
-          displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
-        } else {
-          menuState = MENU_BROWSE;
-          lastMenuTopItem = -1;
-          lastCurrentMenuItem = -1;
-          lcd.clear();
-          delay(150);
-          drawMenu();
-        }
-      } else if (menuState == NORMAL) {
-        if (fullTravelSteps > 0 && !leftLimitState && !rightLimitState) {
-          startCentering();
-        }
-      }
-    }
-  }
-  encoderButtonPrevState = encBtnState;
+  // All button logic is now handled by handleSetMenuButton(), handleCenterButton(), and handleToggleButton()
 
   if (menuState != NORMAL || menuState != lastMenuState) {
     if (menuState == MENU_EXIT_CONFIRM) {
@@ -825,7 +776,8 @@ long getMenuValueInt(int idx) {
     case 14: return stepperAcceleration;
     case 15: return buttonHoldInterval;
     case 16: return (long)(dynamicSpeedFactor * 100);
-    case 17: return 0;
+    case 17: return motorCurrentLevel;
+    case 18: return 0; // EXIT MENU is now 18
     default: return 0;
   }
 }
@@ -841,6 +793,10 @@ void adjustParameter(int delta) {
       } else {
         myPID.SetMode(AUTOMATIC);
       }
+      break;
+    case 17: // Motor Current
+      motorCurrentLevel = (motorCurrentLevel + 1) % 4;
+      setMotorCurrent();
       break;
   }
 }
@@ -874,7 +830,7 @@ void parseEditedValue(int idx) {
 // ====================================================================
 void runCalibration() {
   unsigned long currentMillis = millis();
-  bool encBtnState = digitalRead(ENCODER_SW);
+  bool encBtnState = digitalRead(SET_MENU_BUTTON_PIN);
   leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
   rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
   int delta = 0;
@@ -1218,7 +1174,15 @@ void getMenuValueString(int idx, char* buffer) {
       for (int i = 0; temp[i] == ' '; i++) temp[i] = '_';
       strcpy(buffer, temp);
       break;
-    case 17: strcpy(buffer, ""); break;
+    case 17:
+      switch (motorCurrentLevel) {
+        case 0: strcpy(buffer, "0%"); break;
+        case 1: strcpy(buffer, "50%"); break;
+        case 2: strcpy(buffer, "100%"); break;
+        case 3: strcpy(buffer, "150%"); break;
+      }
+      break;
+    case 18: strcpy(buffer, ""); break; // EXIT MENU is now 18
     default: strcpy(buffer, ""); break;
   }
 }
@@ -1316,16 +1280,21 @@ void setup() {
   pinMode(RIGHT_LIMIT_PIN, INPUT);
   pinMode(DIRECTION_PIN, OUTPUT);
   pinMode(STEP_PIN, OUTPUT);
-  pinMode(ENCODER_SW, INPUT_PULLUP);
+  pinMode(CENTER_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(SET_MENU_BUTTON_PIN, INPUT_PULLUP);
   pinMode(TOGGLE_BUTTON_PIN, INPUT);
   pinMode(LEFT_BUTTON_PIN, INPUT_PULLUP);
   pinMode(RIGHT_BUTTON_PIN, INPUT_PULLUP);
   pinMode(MODE_LED_PIN, OUTPUT);
   pinMode(LEFT_LED_PIN, OUTPUT);
   pinMode(RIGHT_LED_PIN, OUTPUT);
+
+  pinMode(C0_PIN, OUTPUT);
+  pinMode(C1_PIN, OUTPUT);
+
   digitalWrite(LEFT_LED_PIN, LOW);
   digitalWrite(RIGHT_LED_PIN, LOW);
-  lcd.begin(20, 4);
+  lcd.begin(20, 2);
   delay(100);
   createBarGraphChars();
   lcd.setCursor(0, 0);
@@ -1340,6 +1309,7 @@ void setup() {
   lcd.clear();
   delay(150);
   loadSettings();
+  setMotorCurrent();
   stepper.setMaxSpeed(stepperMaxSpeed);
   stepper.setAcceleration(stepperAcceleration);
   myPID.SetMode(AUTOMATIC);
@@ -1389,6 +1359,8 @@ void loop() {
 
   // Menu & buttons are always active
   handleMenuSystem();
+  handleSetMenuButton();
+  handleCenterButton();
   handleToggleButton();
 
   // Main operational logic only runs when not in menu/calib/centering
@@ -1495,6 +1467,7 @@ float readVoltage() {
 void handleToggleButton() {
   bool toggleBtnState = digitalRead(TOGGLE_BUTTON_PIN);
   unsigned long now = millis();
+
   if (toggleBtnState == HIGH && toggleButtonPrevState == LOW) {
     toggleButtonDownTime = now;
   } else if (toggleBtnState == LOW && toggleButtonPrevState == HIGH) {
@@ -1507,13 +1480,113 @@ void handleToggleButton() {
         myPID.SetMode(AUTOMATIC);
       }
       saveSettings();
-      if (menuState == NORMAL && calibState == CALIB_IDLE) {
-        lcd.setCursor(0, 1);
-        lcd.print(isManualMode ? F("CONTROL MANUAL      ") : F("AUTO MODE          "));
-      }
     }
   }
   toggleButtonPrevState = toggleBtnState;
+}
+
+void handleCenterButton() {
+  bool centerBtnState = digitalRead(CENTER_BUTTON_PIN);
+  if (centerBtnState == LOW && centerButtonPrevState == HIGH) {
+    if (menuState == NORMAL && calibState == CALIB_IDLE && !centeringActive) {
+      if (fullTravelSteps > 0 && !leftLimitState && !rightLimitState) {
+        startCentering();
+      }
+    }
+  }
+  centerButtonPrevState = centerBtnState;
+}
+
+void handleSetMenuButton() {
+  bool encBtnState = digitalRead(SET_MENU_BUTTON_PIN);
+  unsigned long now = millis();
+
+  if (encBtnState == LOW && encoderButtonPrevState == HIGH) {
+    encoderButtonDownTime = now;
+  } else if (encBtnState == HIGH && encoderButtonPrevState == LOW) {
+    unsigned long held = now - encoderButtonDownTime;
+
+    if (held >= LONG_PRESS_MS) {
+      // Long press: Enter or Exit Menu
+      if (menuState == NORMAL) {
+        menuState = MENU_BROWSE;
+        lastMenuTopItem = -1;
+        lastCurrentMenuItem = -1;
+        for (int i = 0; i < numMenuItems; i++) {
+          lastMenuValues[i] = 0x7fffffffffffffffLL;
+        }
+        lcd.clear();
+        delay(150);
+        drawMenu();
+      } else {
+        menuState = NORMAL;
+        lcd.clear();
+        delay(150);
+        updateMainDisplay();
+        displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
+      }
+    } else if (held >= SHORT_PRESS_MS) {
+      // Short press: Select/confirm
+      if (menuState == MENU_BROWSE) {
+        if (currentMenuItem == 11) { // Calib Steps
+          menuState = MENU_CALIB;
+          calibState = CALIB_INIT;
+          currentCalibMenuItem = 0;
+          lastCalibMenuItem = -1;
+          lcd.clear();
+          delay(150);
+        } else if (currentMenuItem == numMenuItems - 1) { // EXIT MENU
+          menuState = MENU_EXIT_CONFIRM;
+          currentCalibMenuItem = 0;
+          lastCalibMenuItem = -1;
+          lcd.clear();
+          delay(150);
+        } else if (isNumericItem(currentMenuItem)) {
+          menuState = MENU_DIGIT_EDIT;
+          getMenuValueString(currentMenuItem, editValueStr);
+          currentDigitPos = 0;
+          blinkTimer = millis();
+          blinkState = true;
+        } else if (isToggleItem(currentMenuItem)) {
+          menuState = MENU_EDIT;
+        }
+      } else if (menuState == MENU_EDIT) {
+        menuState = MENU_BROWSE;
+        saveSettings();
+        lastMenuTopItem = -1;
+        lastCurrentMenuItem = -1;
+      } else if (menuState == MENU_DIGIT_EDIT) {
+        do {
+          currentDigitPos++;
+          if (editValueStr[currentDigitPos] == '\0') {
+            parseEditedValue(currentMenuItem);
+            menuState = MENU_BROWSE;
+            saveSettings();
+            lastMenuTopItem = -1;
+            lastCurrentMenuItem = -1;
+            break;
+          }
+        } while (!(isdigit(editValueStr[currentDigitPos]) || editValueStr[currentDigitPos] == '_'));
+      } else if (menuState == MENU_EXIT_CONFIRM) {
+        if (currentCalibMenuItem == 0) { // Save
+          saveSettings();
+          menuState = NORMAL;
+          lcd.clear();
+          delay(150);
+          updateMainDisplay();
+          displayLockoutUntil = now + DISPLAY_LOCKOUT_MS;
+        } else { // Cancel
+          menuState = MENU_BROWSE;
+          lastMenuTopItem = -1;
+          lastCurrentMenuItem = -1;
+          lcd.clear();
+          delay(150);
+          drawMenu();
+        }
+      }
+    }
+  }
+  encoderButtonPrevState = encBtnState;
 }
 
 bool readStableButtonState(int pin) {
