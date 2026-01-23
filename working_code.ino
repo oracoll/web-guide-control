@@ -49,9 +49,6 @@ const char STR_CALIBRATE_FIRST[] PROGMEM = "Calibrate first!";
 const char STR_CENTER_TIMEOUT[] PROGMEM = "Center Timeout!";
 const char STR_LIMIT_HIT[] PROGMEM = "Limit hit!";
 const char STR_ADJUSTING[] PROGMEM = "Adjusting..";
-const char STR_CENTER_NOT_FOUND[] PROGMEM = "Center not found";
-const char STR_HOMING_TO_LEFT[] PROGMEM = "Homing to left...";
-const char STR_EDGE_NOT_FOUND[] PROGMEM = "Edge not found";
 const char STR_WEB_GUIDE[] PROGMEM = "WEB GUIDE V3.1";
 const char STR_INITIALIZING[] PROGMEM = "Initializing...";
 const char STR_MANUAL[] PROGMEM = "Man";
@@ -60,6 +57,10 @@ const char STR_NEEDS_CALIBRATION[] PROGMEM = "[NEEDS CALIBRATION!]";
 const char STR_LEFT_LIMIT_ROMANIAN[] PROGMEM = "<<< LIMITA STANGA";
 const char STR_RIGHT_LIMIT_ROMANIAN[] PROGMEM = "LIMITA DREAPTA >>>";
 const char STR_PRESS_SET_MENU[] PROGMEM = "Press SET for menu";
+const char STR_CENTER_NOT_FOUND[] PROGMEM = "Center not found";
+const char STR_HOMING_TO_LEFT[] PROGMEM = "Homing to left...";
+const char STR_EDGE_NOT_FOUND[] PROGMEM = "Edge not found!";
+
 
 // ====================================================================
 // MOTOR CONFIGURATION - Grouped related constants
@@ -179,7 +180,7 @@ unsigned long lastFullDisplayRefresh = 0;
 const unsigned long FULL_DISPLAY_REFRESH_INTERVAL = 5000; // 5 sec
 
 // ====================================================================
-// CENTERING SPEED VARIABLES 
+// CENTERING SPEED VARIABLES
 // ====================================================================
 const int CENTER_MOVE_SPEED_DEFAULT = 800;    // Fast speed for moving to center
 const int CENTER_MOVE_SPEED_MIN = 50;
@@ -294,8 +295,8 @@ const int numCalibMenuItems = sizeof(calibMenuItems) / sizeof(calibMenuItems[0])
 // ====================================================================
 // CENTERING WITH SENSOR STATE
 // ====================================================================
-enum CenteringState { 
-  CENTERING_IDLE, 
+enum CenteringState {
+  CENTERING_IDLE,
   CENTERING_MOVE_TO_CENTER,
   CENTERING_FIND_TRANSITION,
   CENTERING_COMPLETE
@@ -322,7 +323,7 @@ const char* menuItems[] = {
   "PID Kp", "PID Ki", "PID Kd", "PID Direction", "Sensor SetPoint",
   "Deadband", "Operation Mode", "Min Speed", "Max Speed",
   "Homing Speed", "Auto Speed", "Calib Steps", "Manual Factor",
-  "Manual Fac SW", "Manual Speed", "Acceleration", "Manual Btn Hold tm", "Dyn Speed %","Center Speed", 
+  "Manual Fac SW", "Manual Speed", "Acceleration", "Manual Btn Hold tm", "Dyn Speed %","Center Speed",
   "Mot. Current", "Home...", "EXIT MENU"
 };
 
@@ -439,7 +440,7 @@ struct Settings {
   int buttonHoldInterval;
   float dynamicSpeedFactor;
   MotorCurrentLevel motorCurrentLevel;
-  int centerMoveSpeed;        
+  int centerMoveSpeed;
   int centerFineSpeed;
   int centerCoarseFineSpeed;
   uint16_t checksum;
@@ -542,13 +543,13 @@ void lcdPrint_P(const char* str) {
 void showSystemError() {
   systemErrorState = true;
   systemErrorDisplayTime = millis();
-  
+
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print(F("System Error!"));
   lcd.setCursor(0, 1);
   lcdPrint_P(STR_CALIBRATE_FIRST);
-  
+
   // Show hint for menu access
   delay(1500);
   lcd.setCursor(0, 1);
@@ -572,7 +573,7 @@ void updateCurrentPosition(long newPosition) {
   if (currentPosition != newPosition) {
     currentPosition = newPosition;
     stepper.setCurrentPosition(newPosition);
-    
+
     // Update position-dependent states
     if (fullTravelSteps > 0) {
       bool atCenter = abs(currentPosition - fullTravelSteps/2) < 5;
@@ -593,14 +594,14 @@ bool checkSystemStatus() {
     }
     return false;
   }
-  
+
   // Skip position check during homing/centering operations
   if (!homingDone || homingState != HOMING_IDLE || centeringActive) {
     return true;
   }
-  
+
   // Check if we're at a limit but not tracking it
-  if ((leftLimitState && currentPosition > 10) || 
+  if ((leftLimitState && currentPosition > 10) ||
       (rightLimitState && currentPosition < fullTravelSteps - 10)) {
     if (!systemErrorState) {
       lcd.clear();
@@ -614,7 +615,7 @@ bool checkSystemStatus() {
     }
     return false;
   }
-  
+
   return true;
 }
 
@@ -629,23 +630,23 @@ bool validateConfiguration() {
     stepperMinSpeed = stepperMaxSpeed;
     stepperMaxSpeed = temp;
   }
-  
+
   if (stepManualFactor <= 0) {
     stepManualFactor = STEP_MANUAL_FACTOR_DEFAULT;
   }
-  
+
   if (stepManualFactorSW <= 0) {
     stepManualFactorSW = STEP_MANUAL_FACTOR_SW_DEFAULT;
   }
-  
+
   // Ensure PID values are reasonable
   if (Kp <= 0) Kp = KP_DEFAULT;
   if (Ki < 0) Ki = KI_DEFAULT;
   if (Kd < 0) Kd = KD_DEFAULT;
-  
+
   // Update PID controller with validated values
   myPID.SetTunings(Kp, Ki, Kd);
-  
+
   return true;
 }
 
@@ -729,11 +730,11 @@ void loadSettings() {
     centerMoveSpeed = CENTER_MOVE_SPEED_DEFAULT;
     centerFineSpeed = CENTER_FINE_SPEED_DEFAULT;
     centerCoarseFineSpeed = CENTER_COARSE_FINE_SPEED_DEFAULT;
-    
+
   } else {
     // Use loaded values if they're valid
     wdt_reset();
-    
+
     Kp = isValidFloat(settings.Kp, KP_MIN, KP_MAX) ? settings.Kp : KP_DEFAULT;
     Ki = isValidFloat(settings.Ki, KI_MIN, KI_MAX) ? settings.Ki : KI_DEFAULT;
     Kd = isValidFloat(settings.Kd, KD_MIN, KD_MAX) ? settings.Kd : KD_DEFAULT;
@@ -741,9 +742,9 @@ void loadSettings() {
     setPoint = isValidFloat(settings.setPoint, SETPOINT_MIN, SETPOINT_MAX) ? settings.setPoint : SETPOINT_DEFAULT;
     deadband = isValidFloat(settings.deadband, DEADBAND_MIN, DEADBAND_MAX) ? settings.deadband : DEADBAND_DEFAULT;
     isManualMode = settings.isManualMode;
-    
+
     wdt_reset();
-    
+
     int loadedMinSpeed = settings.stepperMinSpeed;
     int loadedMaxSpeed = settings.stepperMaxSpeed;
     if (loadedMinSpeed > loadedMaxSpeed) {
@@ -752,22 +753,22 @@ void loadSettings() {
       loadedMinSpeed = loadedMaxSpeed;
       loadedMaxSpeed = temp;
     }
-    
+
     stepperMinSpeed = isValidInt(loadedMinSpeed, STEPPER_MIN_SPEED_MIN, STEPPER_MAX_SPEED_MAX) ? loadedMinSpeed : STEPPER_MIN_SPEED_DEFAULT;
     stepperMaxSpeed = isValidInt(loadedMaxSpeed, STEPPER_MIN_SPEED_MIN, STEPPER_MAX_SPEED_MAX) ? loadedMaxSpeed : STEPPER_MAX_SPEED_DEFAULT;
     homingSpeed = isValidInt(settings.homingSpeed, HOMING_SPEED_MIN, HOMING_SPEED_MAX) ? settings.homingSpeed : HOMING_SPEED_DEFAULT;
     autoModeSpeed = isValidInt(settings.autoModeSpeed, AUTO_MODE_SPEED_MIN, AUTO_MODE_SPEED_MAX) ? settings.autoModeSpeed : AUTO_MODE_SPEED_DEFAULT;
-    
+
     wdt_reset();
-    
+
     fullTravelSteps = settings.fullTravelSteps >= FULL_TRAVEL_STEPS_MIN ? settings.fullTravelSteps : FULL_TRAVEL_STEPS_DEFAULT;
     stepManualFactor = isValidInt(settings.stepManualFactor, STEP_MANUAL_FACTOR_MIN, STEP_MANUAL_FACTOR_MAX) ? settings.stepManualFactor : STEP_MANUAL_FACTOR_DEFAULT;
     stepManualFactorSW = isValidInt(settings.stepManualFactorSW, STEP_MANUAL_FACTOR_SW_MIN, STEP_MANUAL_FACTOR_SW_MAX) ? settings.stepManualFactorSW : STEP_MANUAL_FACTOR_SW_DEFAULT;
     stepperAcceleration = isValidInt(settings.stepperAcceleration, STEPPER_ACCELERATION_MIN, STEPPER_ACCELERATION_MAX) ? settings.stepperAcceleration : STEPPER_ACCELERATION_DEFAULT;
     buttonHoldInterval = isValidInt(settings.buttonHoldInterval, BUTTON_HOLD_INTERVAL_MIN, BUTTON_HOLD_INTERVAL_MAX) ? settings.buttonHoldInterval : BUTTON_HOLD_INTERVAL_DEFAULT;
-    
+
     wdt_reset();
-    
+
     dynamicSpeedFactor = isValidFloat(settings.dynamicSpeedFactor, DYNAMIC_SPEED_FACTOR_MIN, DYNAMIC_SPEED_FACTOR_MAX) ? settings.dynamicSpeedFactor : DYNAMIC_SPEED_FACTOR_DEFAULT;
     currentMotorLevel = settings.motorCurrentLevel;
     centerMoveSpeed = isValidInt(settings.centerMoveSpeed, CENTER_MOVE_SPEED_MIN, CENTER_MOVE_SPEED_MAX) ? settings.centerMoveSpeed : CENTER_MOVE_SPEED_DEFAULT;
@@ -809,7 +810,7 @@ void setMotorCurrentLevel(MotorCurrentLevel level) {
 }
 
 // ====================================================================
-// HELPER FUNCTION 
+// HELPER FUNCTION
 // ====================================================================
 void setStepperSpeedsForMode() {
   if (isManualMode) {
@@ -848,17 +849,17 @@ void runHomingSequence() {
       delay(100);
       lcd.setCursor(0, 0);
       lcdPrint_P(STR_HOMING);
-      
+
       homingStartTime = now;
-      
+
       // Update limit states before starting
       leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
       rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
-      
+
       if (homeToLeft) {
         lcd.setCursor(0, 1);
         lcd.print(F("Moving to left limit"));
-        
+
         // Safety check: if we're somehow at the right limit, we're stuck
         if (rightLimitState) {
           lcd.clear();
@@ -877,7 +878,7 @@ void runHomingSequence() {
       } else {
         lcd.setCursor(0, 1);
         lcd.print(F("Moving to right limit"));
-        
+
         // Safety check: if we're somehow at the left limit, we're stuck
         if (leftLimitState) {
           lcd.clear();
@@ -916,11 +917,11 @@ void runHomingSequence() {
         lcdPrint_P(STR_LEFT_LIMIT);
         lcd.print(F("    ")); // Add spaces to clear rest of line
         delay(200);
-        
+
         // Update limit states after stopping
         leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
         rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
-        
+
         if (fullTravelSteps > 0) {
           long centerPos = fullTravelSteps / 2;
           lcd.clear();
@@ -961,11 +962,11 @@ void runHomingSequence() {
         lcdPrint_P(STR_RIGHT_LIMIT);
         lcd.print(F("   ")); // Add spaces to clear rest of line
         delay(200);
-        
+
         // Update limit states after stopping
         leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
         rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
-        
+
         if (fullTravelSteps > 0) {
           long centerPos = fullTravelSteps / 2;
           lcd.clear();
@@ -995,12 +996,12 @@ void runHomingSequence() {
       stepper.run();
   if (stepper.distanceToGo() == 0) {
     currentPosition = stepper.currentPosition();
-    
+
     // === STOP COMPLETELY ===
     stepper.stop();
     stepper.setSpeed(0);
     stepper.moveTo(currentPosition);  // Prevent further movement
-    
+
     digitalWrite(LEFT_LED_PIN, LOW);
     digitalWrite(RIGHT_LED_PIN, LOW);
     digitalWrite(CENTER_LED_PIN, HIGH);
@@ -1023,7 +1024,7 @@ void runHomingSequence() {
       delay(500);
       homingState = HOMING_IDLE;
       justFinishedHoming = true;
-      
+
       // NEW: Verify position after homing
       verifyPositionAfterHoming();
       break;
@@ -1074,7 +1075,7 @@ void verifyPositionAfterHoming() {
     lcd.setCursor(0, 1);
     lcdPrint_P(STR_RECALIBRATING);
     delay(1000);
-    
+
     // Try to move to center again
     stepper.setMaxSpeed(homingSpeed);
     stepper.setAcceleration(stepperAcceleration);
@@ -1089,7 +1090,7 @@ void verifyPositionAfterHoming() {
 bool updateCenterSensor() {
   unsigned long now = millis();
   int rawState = digitalRead(CENTER_LIMIT_PIN);
-  
+
   if (rawState != lastCenterSensorState && (now - centerSensorDebounceTime) >= CENTER_SENSOR_DEBOUNCE_MS) {
     lastCenterSensorState = rawState;
     centerSensorDebounceTime = now;
@@ -1100,8 +1101,8 @@ bool updateCenterSensor() {
 }
 
 void startSmartCentering() {
-  
-  
+
+
   if (homingDone && !centeringActive && fullTravelSteps > 0) {
     centeringActive = true;
     // === DISABLE PID DURING CENTERING ===
@@ -1111,22 +1112,22 @@ void startSmartCentering() {
     }
     centeringState = CENTERING_MOVE_TO_CENTER;
     centeringTransitionFound = false;  // Reset transition tracking
-    
+
     long targetCenter = fullTravelSteps / 2;
     long currentPos = stepper.currentPosition();
-    
+
     lcd.clear();
     lcd.setCursor(0, 0);
     lcdPrint_P(STR_CENTERING);
-    
+
     stepper.setMaxSpeed(centerMoveSpeed);
     stepper.setAcceleration(stepperAcceleration);
-    
+
     if (leftLimitState) {
       stepper.moveTo(targetCenter);
       lcd.setCursor(0, 1);
       lcd.print(F("From left limit ->"));
-    } 
+    }
     else if (rightLimitState) {
       stepper.moveTo(targetCenter);
       lcd.setCursor(0, 1);
@@ -1148,10 +1149,10 @@ void startSmartCentering() {
       lcd.print(F("At center, fine adj"));
       centeringState = CENTERING_FIND_TRANSITION;
       centeringTransitionFound = false;
-      
+
       currentCenterSensorState = digitalRead(CENTER_LIMIT_PIN);
       lastCenterSensorState = currentCenterSensorState;
-      
+
       // Move slightly off center to ensure we detect the transition
       stepper.moveTo(targetCenter + 50);
       stepper.setSpeed(centerCoarseFineSpeed);
@@ -1193,7 +1194,7 @@ void runSmartCentering() {
     stepper.stop();
     centeringActive = false;
     centeringState = CENTERING_IDLE;
-    
+
     // START FALLBACK HOMING
     lcd.clear();
     lcd.setCursor(0, 0);
@@ -1212,7 +1213,7 @@ void runSmartCentering() {
       stepper.run();
       if (stepper.distanceToGo() == 0) {
         delay(20);
-        
+
         // Read initial sensor state
         currentCenterSensorState = digitalRead(CENTER_LIMIT_PIN);
         lastCenterSensorState = currentCenterSensorState;
@@ -1250,25 +1251,25 @@ void runSmartCentering() {
 
     case CENTERING_FIND_TRANSITION:
       stepper.run(); // Use run() instead of runSpeed() for position-based movement
-      
+
       // Detect edge transition ONCE
       if (sensorChanged && !centeringTransitionFound) {
         centeringTransitionFound = true;
         long transitionPosition = stepper.currentPosition();
-        
+
         // Stop immediately at transition point
         stepper.stop();
         delay(10);
-        
+
         // This IS the center - no offset calculation needed
         stepper.setMaxSpeed(centerFineSpeed);
         stepper.setAcceleration(stepperAcceleration);
         stepper.moveTo(transitionPosition); // Stay exactly here
-        
+
         lcd.setCursor(0, 1);
         lcd.print(F("Edge found!      "));
         delay(300);
-        
+
         centeringState = CENTERING_COMPLETE;
       }
 
@@ -1277,24 +1278,24 @@ void runSmartCentering() {
         stepper.stop();
         centeringActive = false;
         centeringState = CENTERING_IDLE;
-        
+
         // Re-enable PID if in auto mode
         if (!isManualMode) {
           myPID.SetMode(AUTOMATIC);
         }
-        
+
         lcd.clear();
         lcdPrint_P(STR_LIMIT_HIT);
         delay(1000);
         updateMainDisplay();
       }
-      
+
       // Safety: if sweep completes without finding edge, we missed it
       if (stepper.distanceToGo() == 0 && !centeringTransitionFound) {
         stepper.stop();
         centeringActive = false;
         centeringState = CENTERING_IDLE;
-        
+
         // START FALLBACK HOMING
         lcd.clear();
         lcd.setCursor(0, 0);
@@ -1313,16 +1314,16 @@ void runSmartCentering() {
       stepper.run();
       if (stepper.distanceToGo() == 0) {
         delay(50);
-        
+
         // === COMPLETE STOP ===
         stepper.stop();
         stepper.setSpeed(0);
         long finalPos = stepper.currentPosition();
         stepper.setCurrentPosition(finalPos);
         stepper.moveTo(finalPos);
-        
+
         currentPosition = finalPos;
-        
+
         // Display completion
         lcd.clear();
         lcd.setCursor(0, 0);
@@ -1332,18 +1333,18 @@ void runSmartCentering() {
         snprintf(buf, sizeof(buf), "Pos:%ld", currentPosition);
         lcd.print(buf);
         digitalWrite(CENTER_LED_PIN, HIGH);
-        
+
         // === CRITICAL: DEACTIVATE CENTERING COMPLETELY ===
         centeringActive = false;
         centeringState = CENTERING_IDLE;
-        
+
         // Re-enable PID if in auto mode
         if (!isManualMode) {
           myPID.SetMode(AUTOMATIC);
         }
-        
+
         delay(1500);
-        
+
         // Return to normal display
         updateMainDisplay();
       }
@@ -1352,7 +1353,7 @@ void runSmartCentering() {
     default:
       centeringActive = false;
       centeringState = CENTERING_IDLE;
-      
+
       // Re-enable PID if in auto mode
       if (!isManualMode) {
         myPID.SetMode(AUTOMATIC);
@@ -1367,33 +1368,33 @@ void runSmartCentering() {
 void verifyCenterPosition() {
   long expectedCenter = fullTravelSteps / 2;
   long actualPosition = stepper.currentPosition();
-  
+
   const int POSITION_TOLERANCE = 5;
-  
+
   if (abs(actualPosition - expectedCenter) > POSITION_TOLERANCE) {
     // Position is off, correct it
     stepper.setMaxSpeed(centerFineSpeed);
     stepper.setAcceleration(stepperAcceleration / 2);
     stepper.moveTo(expectedCenter);
-    
+
     unsigned long startTime = millis();
     const unsigned long MOVE_TIMEOUT = 5000;
-    
+
     while (stepper.distanceToGo() != 0 && (millis() - startTime < MOVE_TIMEOUT)) {
       stepper.run();
       wdt_reset();
     }
-    
+
     // === FORCE ABSOLUTE STOP AFTER CORRECTION ===
     stepper.stop();
     stepper.setSpeed(0);
     long correctedPos = stepper.currentPosition();
     stepper.setCurrentPosition(correctedPos);
     stepper.moveTo(correctedPos);
-    
+
     stepper.setMaxSpeed(stepperMaxSpeed);
     stepper.setAcceleration(stepperAcceleration);
-    
+
     if (abs(stepper.currentPosition() - expectedCenter) > POSITION_TOLERANCE) {
       lcd.clear();
       lcd.setCursor(0, 0);
@@ -1403,7 +1404,7 @@ void verifyCenterPosition() {
       delay(2000);
     }
   }
-  
+
   currentPosition = stepper.currentPosition();
   stepper.setCurrentPosition(currentPosition);
 }
@@ -1431,14 +1432,14 @@ void updateDirectionLEDsFromVelocity(float speed) {
 
 void updateSetLedBlink() {
   unsigned long now = millis();
-  
+
   if (setButtonPrevState == LOW && menuState == NORMAL) {
     unsigned long held = now - setButtonDownTime;
-    
+
     if (held < SET_BUTTON_LONG_PRESS_MS) {
       unsigned long timeRemaining = SET_BUTTON_LONG_PRESS_MS - held;
       unsigned long blinkSpeed;
-      
+
       if (timeRemaining > 2000) {
         blinkSpeed = 500;
       } else if (timeRemaining > 1000) {
@@ -1446,7 +1447,7 @@ void updateSetLedBlink() {
       } else {
         blinkSpeed = 100;
       }
-      
+
       if (now - setLedBlinkTimer >= blinkSpeed) {
         blinkState = !blinkState;
         setLedBlinkTimer = now;
@@ -1505,9 +1506,9 @@ void drawMenu() {
 
   for (int i = 0; i < 2; i++) {
     int idx = menuTopItem + i;
-    
+
     if (idx < 0 || idx >= numMenuItems) continue;
-    
+
     long currentValue = getMenuValueInt(idx);
 
     if (forceRedraw || lastMenuValues[idx] != currentValue || (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem)) {
@@ -1521,7 +1522,7 @@ void drawMenu() {
 
         char valueStr[24];
         memset(valueStr, 0, sizeof(valueStr));
-        
+
         if (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem) {
           strncpy(valueStr, editValueStr, 23);
           if (!blinkState && (isdigit(valueStr[currentDigitPos]) || valueStr[currentDigitPos] == '_')) {
@@ -1582,7 +1583,7 @@ void drawCalibMenu() {
 
 long getMenuValueInt(int idx) {
   if (idx < 0 || idx >= numMenuItems) return 0;
-  
+
   switch(idx) {
     case 0: return (long)(Kp * 100);
     case 1: return (long)(Ki * 1000);
@@ -1612,20 +1613,20 @@ long getMenuValueInt(int idx) {
 
 void adjustParameter(int delta) {
   switch(currentMenuItem) {
-    case 3: 
-      pidDirection = (pidDirection == DIRECT ? REVERSE : DIRECT); 
-      myPID.SetControllerDirection(pidDirection); 
+    case 3:
+      pidDirection = (pidDirection == DIRECT ? REVERSE : DIRECT);
+      myPID.SetControllerDirection(pidDirection);
       break;
     case 6:
       // Stop motion cleanly
-      stepper.stop(); 
+      stepper.stop();
       long pos = stepper.currentPosition();
       stepper.setCurrentPosition(pos);
       stepper.moveTo(pos);
-      
+
       isManualMode = !isManualMode;
       digitalWrite(MODE_LED_PIN, isManualMode ? LOW : HIGH);
-      
+
       if (isManualMode) {
         handleManualButtons();
         myPID.SetMode(MANUAL);
@@ -1643,20 +1644,20 @@ void adjustParameter(int delta) {
 // ====================================================================
 void parseEditedValue(int idx) {
   wdt_reset();
-  
+
   if (idx < 0 || idx >= numMenuItems) return;
-  
+
   char tempStr[24];
   memset(tempStr, 0, sizeof(tempStr));
   strncpy(tempStr, editValueStr, 23);
   tempStr[23] = '\0';
-  
+
   if (strlen(tempStr) == 0) return;
-  
+
   for (int i = 0; tempStr[i]; i++) {
     if (tempStr[i] == '_') tempStr[i] = '0';
   }
-  
+
   switch(idx) {
     case 0: Kp = constrain(atof(tempStr), KP_MIN, KP_MAX); myPID.SetTunings(Kp, Ki, Kd); break;
     case 1: Ki = constrain(atof(tempStr), KI_MIN, KI_MAX); myPID.SetTunings(Kp, Ki, Kd); break;
@@ -1675,7 +1676,7 @@ void parseEditedValue(int idx) {
     case 17: dynamicSpeedFactor = constrain(atof(tempStr) / 100.0, DYNAMIC_SPEED_FACTOR_MIN, DYNAMIC_SPEED_FACTOR_MAX); break;  // Dynamic Speed
     case 18: centerMoveSpeed = constrain((int)atol(tempStr), CENTER_MOVE_SPEED_MIN, CENTER_MOVE_SPEED_MAX); break;  // Center Speed
   }
-  
+
   wdt_reset();
 }
 
@@ -1828,7 +1829,7 @@ void runCalibration() {
   digitalWrite(RIGHT_LED_PIN, LOW);
   digitalWrite(CENTER_LED_PIN, LOW);
   digitalWrite(SET_LED_PIN, LOW);
-  
+
   if (currentMillis - calibTimer >= CALIB_TIMEOUT_MS) {
     calibState = CALIB_IDLE;
     menuState = NORMAL;
@@ -1841,15 +1842,15 @@ void runCalibration() {
     displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
     break;
   }
-  
+
   if (delta != 0) {
     currentCalibMenuItem = (currentCalibMenuItem + delta + numCalibMenuItems) % numCalibMenuItems;
     lastCalibMenuItem = -1;
   }
-  
+
   if (setButtonState == LOW && setButtonPrevState == HIGH) {
     setButtonDownTime = currentMillis;
-  } 
+  }
   else if (setButtonState == HIGH && setButtonPrevState == LOW) {
     unsigned long held = currentMillis - setButtonDownTime;
     if (held >= AUTO_BUTTON_DEBOUNCE_MS && held < SET_BUTTON_LONG_PRESS_MS) {
@@ -1877,7 +1878,7 @@ void runCalibration() {
       }
     }
   }
-  
+
   setButtonPrevState = setButtonState;
   drawCalibMenu();
   break;
@@ -1894,17 +1895,17 @@ void runCalibration() {
 
 void updateMainDisplay() {
   // Skip update if position hasn't changed and update interval hasn't passed
-  if (currentPosition == lastDisplayedPosition && 
+  if (currentPosition == lastDisplayedPosition &&
       millis() - lastPositionUpdate < POSITION_UPDATE_INTERVAL) {
     return;
   }
-  
+
   lcd.clear();
   delayMicroseconds(50);
 
   // Format voltage with error checking
   char voltageStr[7];
-  
+
   // Ensure input is valid
   if (input < 0.0 || input > 5.5) {
     strncpy(voltageStr, "x.xx", 7);
@@ -1912,7 +1913,7 @@ void updateMainDisplay() {
     // Format as "X.XX"
     dtostrf(input, 4, 2, voltageStr);
   }
-  
+
   // Use full words, but shorten "Manual" → "MAN" only if space is tight
   const char* modeStr = isManualMode ? STR_MANUAL : STR_AUTO;
 
@@ -1966,7 +1967,7 @@ void updateMainDisplay() {
 }
 
 // ====================================================================
-// UPDATE getMenuValueString() FUNCTION 
+// UPDATE getMenuValueString() FUNCTION
 // ====================================================================
 void getMenuValueString(int idx, char* buffer) {
   if (!buffer) return;
@@ -1974,10 +1975,10 @@ void getMenuValueString(int idx, char* buffer) {
     strcpy(buffer, "ERROR");
     return;
   }
-  
+
   char temp[24];
   memset(temp, 0, sizeof(temp));
-  
+
   switch(idx) {
     case 0:
       dtostrf(Kp, 7, 2, temp);
@@ -2149,7 +2150,7 @@ bool updateLimitSwitch(int pin, unsigned long& debounceTime, bool& lastState) {
 void handleSetButton() {
   bool setButtonState = digitalRead(SET_BUTTON_PIN);
   unsigned long now = millis();
-  
+
   if (setButtonState == LOW && setButtonPrevState == HIGH) {
     setButtonDownTime = now;
     setLedBlinkError = true;
@@ -2158,7 +2159,7 @@ void handleSetButton() {
   } else if (setButtonState == HIGH && setButtonPrevState == LOW) {
     unsigned long held = now - setButtonDownTime;
     setLedBlinkError = false;
-    
+
     if (held >= SET_BUTTON_LONG_PRESS_MS) {
       if (menuState == NORMAL) {
         menuState = MENU_BROWSE;
@@ -2193,7 +2194,7 @@ void handleSetButton() {
         // 19: Motor Current (SUB-MENU)
         // 20: Home... (SUB-MENU)
         // 21: EXIT MENU
-        
+
         if (currentMenuItem == 11) {
           // Calibration menu
           menuState = MENU_CALIB;
@@ -2202,16 +2203,16 @@ void handleSetButton() {
           lastCalibMenuItem = -1;
           lcd.clear();
           delay(150);
-        } 
+        }
         else if (currentMenuItem == 19) {
           // Motor Current submenu
           menuState = MENU_MOTOR_CURRENT_SUB;
-          currentMotorCurrentSubMenuItem = (int)currentMotorLevel; 
+          currentMotorCurrentSubMenuItem = (int)currentMotorLevel;
           lastMotorCurrentSubMenuItem = -1;
           lcd.clear();
           delay(150);
           drawMotorCurrentSubmenu();
-        } 
+        }
         else if (currentMenuItem == 20) {
           // Homing submenu
           menuState = MENU_HOMING_SUB;
@@ -2220,7 +2221,7 @@ void handleSetButton() {
           lcd.clear();
           delay(150);
           drawHomingSubmenu();
-        } 
+        }
         else if (currentMenuItem == 21) {
           // Exit & Save
           menuState = MENU_EXIT_CONFIRM;
@@ -2228,24 +2229,24 @@ void handleSetButton() {
           lastCalibMenuItem = -1;
           lcd.clear();
           delay(150);
-        } 
+        }
         else if (isNumericItem(currentMenuItem)) {
           menuState = MENU_DIGIT_EDIT;
           getMenuValueString(currentMenuItem, editValueStr);
           currentDigitPos = 0;
           blinkTimer = millis();
           blinkState = true;
-        } 
+        }
         else if (isToggleItem(currentMenuItem)) {
           menuState = MENU_EDIT;
         }
-      } 
+      }
       else if (menuState == MENU_EDIT) {
         menuState = MENU_BROWSE;
         saveSettings();
         lastMenuTopItem = -1;
         lastCurrentMenuItem = -1;
-      } 
+      }
       else if (menuState == MENU_DIGIT_EDIT) {
         do {
           currentDigitPos++;
@@ -2258,7 +2259,7 @@ void handleSetButton() {
             break;
           }
         } while (!(isdigit(editValueStr[currentDigitPos]) || editValueStr[currentDigitPos] == '_'));
-      } 
+      }
       else if (menuState == MENU_MOTOR_CURRENT_SUB) {
         if (currentMotorCurrentSubMenuItem == numMotorCurrentSubmenuItems - 1) {
           menuState = MENU_BROWSE;
@@ -2288,7 +2289,7 @@ void handleSetButton() {
           homingDone = false;
           justFinishedHoming = false;
           displayLockoutUntil = millis() + DISPLAY_LOCKOUT_MS;
-        } 
+        }
         else if (currentHomingSubMenuItem == 1) {
           homeToLeft = false;
           menuState = NORMAL;
@@ -2298,7 +2299,7 @@ void handleSetButton() {
           homingDone = false;
           justFinishedHoming = false;
           displayLockoutUntil = millis() + DISPLAY_LOCKOUT_MS;
-        } 
+        }
         else if (currentHomingSubMenuItem == 2) {
           menuState = MENU_BROWSE;
           lastMenuTopItem = -1;
@@ -2307,7 +2308,7 @@ void handleSetButton() {
           delay(150);
           drawMenu();
         }
-      } 
+      }
       else if (menuState == MENU_EXIT_CONFIRM) {
         if (currentCalibMenuItem == 0) {
           saveSettings();
@@ -2332,7 +2333,7 @@ void handleSetButton() {
       setLedBlinkError = true;
     }
   }
-  
+
   setButtonPrevState = setButtonState;
 }
 
@@ -2390,14 +2391,14 @@ void handleMenuSystem() {
   static long lastEncoderPos_menu = 0;
   long newEncoderPos = myEnc.read();
   int delta = 0;
-  
-  if (menuState == MENU_BROWSE || menuState == MENU_EDIT || menuState == MENU_DIGIT_EDIT || 
+
+  if (menuState == MENU_BROWSE || menuState == MENU_EDIT || menuState == MENU_DIGIT_EDIT ||
       menuState == MENU_HOMING_SUB || menuState == MENU_MOTOR_CURRENT_SUB) {
     long encoderDiff = (newEncoderPos - lastEncoderPos_menu) / 4;
     if (encoderDiff != 0) {
       lastEncoderPos_menu = newEncoderPos;
       delta = encoderDiff > 0 ? 1 : -1;
-      
+
       if (menuState == MENU_BROWSE) {
         currentMenuItem = (currentMenuItem + delta + numMenuItems) % numMenuItems;
         if (currentMenuItem < menuTopItem) {
@@ -2408,11 +2409,11 @@ void handleMenuSystem() {
         lastMenuTopItem = -1;
         lastCurrentMenuItem = -1;
         drawMenu();
-      } 
+      }
       else if (menuState == MENU_EDIT) {
         adjustParameter(delta);
         drawMenu();
-      } 
+      }
       else if (menuState == MENU_DIGIT_EDIT) {
         if (isdigit(editValueStr[currentDigitPos]) || editValueStr[currentDigitPos] == '_') {
           int digitVal = (editValueStr[currentDigitPos] == '_') ? 0 : (editValueStr[currentDigitPos] - '0');
@@ -2420,7 +2421,7 @@ void handleMenuSystem() {
           editValueStr[currentDigitPos] = (digitVal == 0 && isNumericItem(currentMenuItem)) ? '_' : ('0' + digitVal);
         }
         drawMenu();
-      } 
+      }
       else if (menuState == MENU_HOMING_SUB) {
         currentHomingSubMenuItem = (currentHomingSubMenuItem + delta + numHomingSubmenuItems) % numHomingSubmenuItems;
         lastHomingSubMenuItem = -1;
@@ -2432,7 +2433,7 @@ void handleMenuSystem() {
         drawMotorCurrentSubmenu();
       }
     }
-  } 
+  }
   else if (menuState == MENU_EXIT_CONFIRM) {
     long encoderDiff = (newEncoderPos - lastEncoderPos_menu) / 4;
     if (encoderDiff != 0) {
@@ -2484,7 +2485,7 @@ void handleMenuSystem() {
 void handleAutoButton() {
   bool autoButtonState = digitalRead(AUTO_BUTTON_PIN);
   unsigned long now = millis();
-  
+
   if (autoButtonState == LOW && autoButtonPrevState == HIGH) {
     // Button pressed
     autoButtonDownTime = now;
@@ -2492,10 +2493,10 @@ void handleAutoButton() {
   else if (autoButtonState == HIGH && autoButtonPrevState == LOW) {
     // Button released
     unsigned long held = now - autoButtonDownTime;
-    
+
     if (held >= AUTO_BUTTON_DEBOUNCE_MS) {
       // Valid press - toggle mode
-      
+
       // === COMPLETE STOP BEFORE SWITCHING ===
       stepper.stop();
       delay(10);
@@ -2503,17 +2504,17 @@ void handleAutoButton() {
       stepper.setCurrentPosition(pos);
       stepper.moveTo(pos);
       delay(10);
-      
+
       // === TOGGLE MODE ===
       isManualMode = !isManualMode;
       digitalWrite(MODE_LED_PIN, isManualMode ? LOW : HIGH);
-      
+
       // === UPDATE PID STATE ===
       if (isManualMode) {
         // Switching TO manual mode
         myPID.SetMode(MANUAL);
         output = 0.0;
-        
+
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print(F("Manual Mode"));
@@ -2522,19 +2523,19 @@ void handleAutoButton() {
       } else {
         // Switching TO auto mode
         myPID.SetMode(AUTOMATIC);
-        
+
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print(F("Auto Mode"));
         delay(500);
         updateMainDisplay();
       }
-      
+
       // === SAVE MODE TO EEPROM ===
       saveSettings();
     }
   }
-  
+
   autoButtonPrevState = autoButtonState;
 }
 
@@ -2542,7 +2543,7 @@ void handleAutoButton() {
 void handleCenterButton() {
   bool centerButtonState = digitalRead(CENTER_BUTTON_PIN);
   unsigned long now = millis();
-  
+
   if (centerButtonState == LOW && centerButtonPrevState == HIGH) {
     centerButtonDownTime = now;
   } else if (centerButtonState == HIGH && centerButtonPrevState == LOW) {
@@ -2565,13 +2566,13 @@ void setup() {
   pinMode(DIRECTION_PIN, OUTPUT);
   pinMode(STEP_PIN, OUTPUT);
   pinMode(ENCODER_SW, INPUT_PULLUP);
-  
+
   pinMode(LEFT_BUTTON_PIN, INPUT_PULLUP);
   pinMode(RIGHT_BUTTON_PIN, INPUT_PULLUP);
   pinMode(CENTER_BUTTON_PIN, INPUT_PULLUP);
   pinMode(AUTO_BUTTON_PIN, INPUT_PULLUP);
   pinMode(SET_BUTTON_PIN, INPUT_PULLUP);
-  
+
   pinMode(LEFT_LED_PIN, OUTPUT);
   pinMode(RIGHT_LED_PIN, OUTPUT);
   pinMode(CENTER_LED_PIN, OUTPUT);
@@ -2589,7 +2590,7 @@ void setup() {
 
   loadSettings();
 
-  
+
 
   lcd.begin(20, 2);
   delay(100);
@@ -2602,24 +2603,24 @@ void setup() {
   lcd.clear();
   delay(150);
   loadSettings();
-  
+
   // Initialize limit switch states
   leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
   rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
-  
-  stepper.setPinsInverted(true, false, false);
+
   stepper.setMaxSpeed(stepperMaxSpeed);
   stepper.setAcceleration(stepperAcceleration);
+  stepper.setPinsInverted(true, false, false);
   myPID.SetMode(AUTOMATIC);
   myPID.SetOutputLimits(-stepperMaxSpeed, stepperMaxSpeed);
   myPID.SetSampleTime(20);
   initMenuValues();
   lastEncoderPos = myEnc.read();
-  lastHandledEncoderPos = myEnc.read(); 
+  lastHandledEncoderPos = myEnc.read();
   lastUpdateTime = millis();
   voltageReadTimer = millis();
   wdt_enable(WDTO_4S);
-  
+
   // ===== MANDATORY STARTUP CENTERING =====
   if (fullTravelSteps > 0) {
     // Check limits to set initial position before centering
@@ -2639,40 +2640,18 @@ void setup() {
     lcd.print(F("Centering..."));
     delay(1500);
 
-    // Set homingDone to true to allow the centering state machine to run
+    // Set homingDone to true to allow centering to start
     homingDone = true;
     startSmartCentering();
-
-    // Block until centering is complete. This is critical for startup.
-    unsigned long startupCenteringTimeout = millis() + 30000; // 30-second timeout
-    while(centeringActive && millis() < startupCenteringTimeout) {
-      runSmartCentering();
-      wdt_reset();
-    }
-
-    // After centering, check if it was successful.
-    if (centeringActive) { // Timeout occurred
-      centeringActive = false; // Reset state
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print(F("Center Timeout!"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("Homing..."));
-      delay(1500);
-      // Fallback to homing
-      homingDone = false;
-      homeToLeft = true; // Or choose a default homing side
-      homingState = HOMING_INIT;
-    }
-
   } else {
     // No calibration data. User must calibrate manually.
     showSystemError();
     homingDone = false; // Prevent operations until calibrated
+    homingState = HOMING_IDLE;
   }
-  
 
-}  // *** END OF setup() ***
+
+}  // *** END OF loop() ***
 
 // ====================================================================
 // MAIN LOOP — POSITION-BASED CONTROL IN ALL MODES
@@ -2686,7 +2665,7 @@ void loop() {
   handleAutoButton();
   handleCenterButton();
   handleMenuSystem();
-  
+
   // Handle system error display timeout
   if (systemErrorState && (currentMillis - systemErrorDisplayTime > SYSTEM_ERROR_DISPLAY_DURATION)) {
     if ((currentMillis / 1000) % 2 == 0) {
@@ -2721,12 +2700,12 @@ void loop() {
     runHomingSequence();
     return;
   }
-  
+
   if (calibState != CALIB_IDLE) {
     runCalibration();
     return;
   }
-  
+
   if (centeringActive) {
     runSmartCentering();
     return;
@@ -2753,16 +2732,16 @@ void loop() {
 
   // ===== OPERATIONAL MODES (only if system is OK) =====
   if (menuState == NORMAL && calibState == CALIB_IDLE && !centeringActive && !systemErrorState) {
-    
+
     if (isManualMode) {
       // ===== MANUAL MODE =====
       handleManualButtons();
-    } 
+    }
     else {
       // ===== AUTO MODE: POSITION-BASED PID =====
       setStepperSpeedsForMode();
 
-      
+
 
       // ===== NORMAL AUTO MODE: PID CONTROL =====
       if (currentMillis - previousMillis >= interval) {
@@ -2828,27 +2807,27 @@ void loop() {
 float readVoltage() {
   long sum = 0;
   const int samples = 10;
-  
+
   // Read ADC multiple times and average
   for (int i = 0; i < samples; i++) {
     sum += analogRead(A0);
     delayMicroseconds(100);  // Use microseconds instead of milliseconds for faster reads
   }
-  
+
   float adcValue = sum / (float)samples;
-  
+
   // Convert ADC value to voltage
   float Vout = (adcValue / ADC_RESOLUTION) * ADC_REF_VOLTAGE;
-  
+
   // Apply voltage divider formula: Vin = Vout * (R1 + R2) / R2
   float Vin = Vout * (R1 + R2) / R2;
-  
+
   // Validate the reading (should be between 0V and ~5V for typical sensor)
   if (Vin < 0.0 || Vin > 5.5) {
     // If out of range, return last valid reading (don't update)
     return input;  // Keep previous value
   }
-  
+
   return Vin;
 }
 
@@ -2857,11 +2836,11 @@ float readVoltage() {
 // ====================================================================
 void updateVoltageReading() {
   unsigned long now = millis();
-  
+
   // In AUTO mode: read voltage frequently (20ms) for PID control
   // In MANUAL mode: read voltage slowly (500ms) - just for display, not critical
   unsigned long readInterval = isManualMode ? VOLTAGE_READ_INTERVAL_MANUAL : VOLTAGE_READ_INTERVAL_AUTO;
-  
+
   if (now - voltageReadTimer >= readInterval) {
     voltageReadTimer = now;
     input = readVoltage();  // Update the global input variable
@@ -2891,7 +2870,7 @@ void handleManualButtons() {
 
   long newEncoderPos = myEnc.read();
   long encoderDiff = (newEncoderPos - lastHandledEncoderPos) / 4;
-  
+
   long targetPos = stepper.currentPosition();
 
   // ===== ENCODER MOVEMENT (Priority 1) =====
@@ -2899,21 +2878,21 @@ void handleManualButtons() {
     // Encoder is being used
     stepper.setMaxSpeed(manualModeSpeed);
     stepper.setAcceleration(stepperAcceleration);
-    
+
     long movementSteps = encoderDiff * stepManualFactor;
     targetPos = stepper.currentPosition() + movementSteps;
     lastHandledEncoderPos = newEncoderPos;
-  } 
+  }
   // ===== BUTTON MOVEMENT (Priority 2) =====
   else {
     setStepperSpeedsForMode();
-    
+
     bool leftBtn = (digitalRead(LEFT_BUTTON_PIN) == LOW);
     bool rightBtn = (digitalRead(RIGHT_BUTTON_PIN) == LOW);
-    
+
     if (leftBtn && !leftLimitState) {
       targetPos = stepper.currentPosition() - stepManualFactorSW;
-    } 
+    }
     else if (rightBtn && !rightLimitState) {
       targetPos = stepper.currentPosition() + stepManualFactorSW;
     }
@@ -2927,7 +2906,7 @@ void handleManualButtons() {
   // Update limit states in real time
   leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
   rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
-  
+
   updateDirectionLEDsFromVelocity(stepper.speed());
 
   if (now - lastPositionUpdate >= POSITION_UPDATE_INTERVAL) {
