@@ -434,6 +434,8 @@ uint16_t calculateChecksum(Settings& settings);
 double input = 0;              // PID input (sensor voltage)
 double displayInput = 4.25;    // Smoothed sensor voltage for display
 double output = 0;             // PID output (stepper speed)
+bool sensorFault = false;      // Sensor fault flag
+int sensorFaultCounter = 0;    // Filter for transient faults
 PID myPID(&input, &output, &setPoint, Kp, Ki, Kd, pidDirection);
 
 long currentPosition = 0;       // Current stepper position
@@ -618,7 +620,20 @@ void stepperTimerISR() {
   // Run stepper motor in interrupt context
   // This ensures stepper pulses happen at exact intervals
   if (runStepperInInterrupt && menuState == NORMAL && !centeringActive) {
-    stepper.run();
+    // INSTANT LIMIT PROTECTION:
+    // Check limit switches at 20kHz for sub-millisecond response.
+    // digitalRead is fast enough for 50us interval on Mega2560.
+    bool leftLimit = (digitalRead(LEFT_LIMIT_PIN) == (LIMIT_ACTIVE_HIGH ? HIGH : LOW));
+    bool rightLimit = (digitalRead(RIGHT_LIMIT_PIN) == (LIMIT_ACTIVE_HIGH ? HIGH : LOW));
+
+    float currentVel = stepper.speed();
+
+    // Only allow pulse generation if NOT hitting a limit in the direction of travel
+    if ((leftLimit && currentVel < -0.1) || (rightLimit && currentVel > 0.1)) {
+        // Block stepper.run() to stop pulses instantly
+    } else {
+        stepper.run();
+    }
   }
 }
 
@@ -1301,14 +1316,17 @@ void setMotorCurrentLevel(MotorCurrentLevel level) {
 
 /**
  * Sets stepper speeds based on current operation mode
+ * PROTECTED: Uses critical sections to prevent ISR interference
  */
 void setStepperSpeedsForMode() {
+  noInterrupts();
   if (isManualMode) {
     stepper.setMaxSpeed(manualModeSpeed);
   } else {
     stepper.setMaxSpeed(autoModeSpeed);
   }
   stepper.setAcceleration(stepperAcceleration);
+  interrupts();
 }
 
 // ====================================================================
@@ -1352,6 +1370,17 @@ void updateVoltageReading() {
     if (Vin >= 0.0 && Vin <= 6.0) {
       input = Vin;
 
+      // SENSOR FAULT PROTECTION:
+      // If sensor reading is at absolute extreme rails, it likely indicates a broken wire.
+      // Thresholds: < 0.1V (Ground short/cut) or > 5.8V (VCC short/cut)
+      if (Vin < 0.1 || Vin > 5.8) {
+        if (sensorFaultCounter < 100) sensorFaultCounter++;
+        if (sensorFaultCounter >= 50) sensorFault = true; // Sustained for ~250ms
+      } else {
+        sensorFaultCounter = 0;
+        sensorFault = false;
+      }
+
       // Update display averaged value (EMA filter for stability)
       // Time constant of ~1 second
       static unsigned long lastAvgUpdate = 0;
@@ -1379,6 +1408,9 @@ void updateVoltageReading() {
  * Non-blocking state machine implementation
  */
 void runHomingSequence() {
+  // CRITICAL: Disable interrupt control while homing to prevent clashes
+  runStepperInInterrupt = false;
+
   static unsigned long messageTimer = 0;
   wdt_reset();
   unsigned long now = millis();
@@ -1608,6 +1640,9 @@ void runHomingSequence() {
         homingState = HOMING_IDLE;
         justFinishedHoming = true;
         
+        // Re-enable interrupt control
+        runStepperInInterrupt = true;
+
         // Immediately update display
         quickUpdateDisplayBuffered();
       }
@@ -1618,6 +1653,7 @@ void runHomingSequence() {
       // Just wait briefly then go to idle
       if (millis() - messageTimer >= 500) {
         homingState = HOMING_IDLE;
+        runStepperInInterrupt = true;
       }
       break;
       
@@ -2409,6 +2445,9 @@ bool updateLimitSwitch(int pin, unsigned long& debounceTime, bool& lastState) {
  * Non-blocking state machine implementation
  */
 void runCalibration() {
+  // Disable interrupt control during calibration
+  runStepperInInterrupt = false;
+
   static unsigned long delayTimer = 0;
   static bool delayWaiting = false;
  
@@ -2494,6 +2533,7 @@ void runCalibration() {
         delayWaiting = true;
         wdt_enable(WDTO_8S);
         displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
+        runStepperInInterrupt = true;
         break;
       }
      
@@ -2527,6 +2567,7 @@ void runCalibration() {
             delayWaiting = true;
             wdt_enable(WDTO_8S);
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
+            runStepperInInterrupt = true;
           }
         }
       }
@@ -2586,6 +2627,7 @@ void runCalibration() {
         delayWaiting = true;
         wdt_enable(WDTO_8S);
         displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
+        runStepperInInterrupt = true;
         break;
       }
      
@@ -2648,6 +2690,7 @@ void runCalibration() {
             wdt_enable(WDTO_8S);
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
             
+            // Note: startSmartCentering handles runStepperInInterrupt
           } else {
             calibState = CALIB_IDLE;
             menuState = NORMAL;
@@ -2657,6 +2700,7 @@ void runCalibration() {
             delayWaiting = true;
             wdt_enable(WDTO_8S);
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
+            runStepperInInterrupt = true;
           }
         }
       }
@@ -2974,10 +3018,13 @@ void drawHomingSubmenu() {
   else if (autoButtonState == HIGH && autoButtonPrevState == LOW) {
     unsigned long held = now - autoButtonDownTime;
     if (held >= AUTO_BUTTON_DEBOUNCE_MS) {
+      noInterrupts();
       stepper.stop();
       long pos = stepper.currentPosition();
       stepper.setCurrentPosition(pos);
       stepper.moveTo(pos);
+      interrupts();
+
       isManualMode = !isManualMode;
       digitalWrite(MODE_LED_PIN, isManualMode ? LOW : HIGH);
       if (isManualMode) {
@@ -3050,8 +3097,10 @@ void handleManualButtons() {
  
   long targetPos = stepper.currentPosition();
   if (encoderDiff != 0) {
+    noInterrupts();
     stepper.setMaxSpeed(stepperMaxSpeed);
     stepper.setAcceleration(stepperAcceleration);
+    interrupts();
    
     long movementSteps = encoderDiff * stepManualFactor;
     targetPos = stepper.currentPosition() + movementSteps;
@@ -3082,12 +3131,16 @@ void handleManualButtons() {
   }
   
   if (isSafeToMove(targetPos)) {
+    noInterrupts();
     stepper.moveTo(targetPos);
+    interrupts();
   }
   
-  stepper.run();
+  noInterrupts();
   currentPosition = stepper.currentPosition();
-  updateDirectionLEDsFromVelocity(stepper.speed());
+  float currentSpeed = stepper.speed();
+  interrupts();
+  updateDirectionLEDsFromVelocity(currentSpeed);
   
   // Fast display update for manual mode
   if (now - lastBargraphUpdate >= BARGRAPH_UPDATE_INTERVAL) {
@@ -3121,6 +3174,12 @@ void handleMenuSystem() {
     if (encoderDiff != 0) {
       lastEncoderPos_menu = newEncoderPos;
       delta = encoderDiff > 0 ? 1 : -1;
+
+      // Interrupt-safe speed setting for menu adjustments
+      noInterrupts();
+      stepper.setMaxSpeed(stepperMaxSpeed);
+      stepper.setAcceleration(stepperAcceleration);
+      interrupts();
      
       if (menuState == MENU_BROWSE) {
         currentMenuItem = (currentMenuItem + delta + numMenuItems) % numMenuItems;
@@ -3462,6 +3521,9 @@ void setup() {
  * FIXED: Does not change setpoint, keeps user's setpoint
  */
 void runSmartStartup() {
+  // CRITICAL: Disable interrupt control while starting up
+  runStepperInInterrupt = false;
+
   static unsigned long startupTimeout = 0;
   static bool firstMove = true;
   static long transitionPos1 = -1;
@@ -3751,6 +3813,9 @@ void runSmartStartup() {
         startupHomingComplete = true;
         startupCenterFound = true;
         startupShowingMessage = false;
+
+        // Re-enable interrupt control
+        runStepperInInterrupt = true;
         
         displayLockoutUntil = millis() + 100;
         
@@ -3760,6 +3825,7 @@ void runSmartStartup() {
       break;
       
     case STARTUP_HOMING_FALLBACK:
+      // Note: Homing will handle runStepperInInterrupt
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print(F("Startup Failed"));
@@ -3885,6 +3951,12 @@ void loop() {
     if (isManualMode) {
       // Manual mode - handle manual control
       handleManualButtons();
+    } else if (sensorFault) {
+      // SENSOR FAULT SAFETY: Stop all movement in Auto mode if sensor fails
+      noInterrupts();
+      stepper.stop();
+      interrupts();
+      updateDirectionLEDsFromVelocity(0);
     } else {
       // Auto mode - PID control
       setStepperSpeedsForMode();
@@ -3928,14 +4000,21 @@ void loop() {
       }
 
       if (isSafeToMove(targetPosition)) {
+        noInterrupts();
         stepper.moveTo(targetPosition);
+        interrupts();
       }
       
       // Update current position from stepper
+      noInterrupts();
       currentPosition = stepper.currentPosition();
+      interrupts();
       
-      // Update direction LEDs
-      updateDirectionLEDsFromVelocity(stepper.speed());
+      // Update direction LEDs (Interrupt-safe reading)
+      noInterrupts();
+      float currentSpeed = stepper.speed();
+      interrupts();
+      updateDirectionLEDsFromVelocity(currentSpeed);
     }
   }
   
@@ -3991,7 +4070,12 @@ void loop() {
     
     // Only update display in normal mode, not during centering or messages
     if (menuState == NORMAL && !centeringActive && !messageDisplayActive) {
-      quickUpdateDisplayBuffered();
+      if (sensorFault && !isManualMode) {
+          // Display critical error message
+          setLcdContent("! SENSOR FAULT !", "Check Cable / VCC ");
+      } else {
+          quickUpdateDisplayBuffered();
+      }
     }
   }
   
