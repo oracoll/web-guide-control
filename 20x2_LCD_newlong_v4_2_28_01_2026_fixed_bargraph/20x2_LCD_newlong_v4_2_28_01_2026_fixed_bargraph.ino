@@ -115,6 +115,7 @@ double deadband = DEADBAND_DEFAULT;    // Current deadband
 // SENSOR FAULT PROTECTION SETTINGS (Adjustable by user)
 const double SENSOR_FAULT_MIN = 0.10;  // Lower fault limit (V) - Detects broken wire / Ground short
 const double SENSOR_FAULT_MAX = 5.80;  // Upper fault limit (V) - Detects VCC short
+const int DISPLAY_AVG_TIME_MS = 500;   // Display averaging time constant (ms). Increase for stability, decrease for speed.
 
 // VOLTAGE DIVIDER SETTINGS (for sensor input)
 const double R1_DEFAULT = 1000.0;      // Voltage divider resistor 1 (Ω)
@@ -1386,14 +1387,13 @@ void updateVoltageReading() {
       }
 
       // Update display averaged value (EMA filter for stability)
-      // Time constant of ~1 second
       static unsigned long lastAvgUpdate = 0;
       unsigned long nowAvg = millis();
       if (lastAvgUpdate == 0) lastAvgUpdate = nowAvg;
       float dt = (nowAvg - lastAvgUpdate) / 1000.0;
       lastAvgUpdate = nowAvg;
 
-      float timeConstant = 1.0; // 1 second averaging
+      float timeConstant = DISPLAY_AVG_TIME_MS / 1000.0;
       float alpha = dt / (timeConstant + dt);
       if (alpha > 1.0) alpha = 1.0;
       if (alpha < 0.0) alpha = 0.0;
