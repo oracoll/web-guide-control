@@ -394,8 +394,6 @@ void updateVoltageReading();
 void setStepperSpeedsForMode();
 
 // Display functions
-void displayVoltageBarGraphFast();
-void displayPositionGraphFast();
 void drawMenu();
 void drawCalibMenu();
 void drawMotorCurrentSubmenu();
@@ -576,27 +574,36 @@ const long STARTUP_SEARCH_RANGE = 5000;    // Max steps to search before giving 
 // ====================================================================
 // CUSTOM LCD BAR GRAPH CHARACTERS
 // ====================================================================
-uint8_t barChars[8][8] = {
-  {0b00000,0b00000,0b00000,0b00000,0b00000,0b00000,0b00000,0b00000}, // 0: Empty
-  {0b00001,0b00001,0b00001,0b00001,0b00001,0b00001,0b00001,0b00001}, // 1: 1 pixel fill (from right)
-  {0b00011,0b00011,0b00011,0b00011,0b00011,0b00011,0b00011,0b00011}, // 2: 2 pixels fill
-  {0b00111,0b00111,0b00111,0b00111,0b00111,0b00111,0b00111,0b00111}, // 3: 3 pixels fill
-  {0b01111,0b01111,0b01111,0b01111,0b01111,0b01111,0b01111,0b01111}, // 4: 4 pixels fill
-  {0b11111,0b11111,0b11111,0b11111,0b11111,0b11111,0b11111,0b11111}, // 5: Full block
-  {0b00011,0b00011,0b00011,0b00011,0b00011,0b00011,0b00011,0b00011}, // 6: Center left marker (2 pixels on RIGHT side of char)
-  {0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000}  // 7: Center right marker (2 pixels on LEFT side of char)
+
+// Patterns for filling from RIGHT to LEFT (used for left side of screen)
+const uint8_t fillPatternsRTL[5] = {
+  0b00000, // 0 pixels
+  0b00001, // 1 pixel
+  0b00011, // 2 pixels
+  0b00111, // 3 pixels
+  0b01111  // 4 pixels
 };
 
-uint8_t barCharsMirrored[8][8] = {
-  {0b00000,0b00000,0b00000,0b00000,0b00000,0b00000,0b00000,0b00000}, // 0: Empty
-  {0b10000,0b10000,0b10000,0b10000,0b10000,0b10000,0b10000,0b10000}, // 1: 1 pixel fill (from left)
-  {0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000}, // 2: 2 pixels fill
-  {0b11100,0b11100,0b11100,0b11100,0b11100,0b11100,0b11100,0b11100}, // 3: 3 pixels fill
-  {0b11110,0b11110,0b11110,0b11110,0b11110,0b11110,0b11110,0b11110}, // 4: 4 pixels fill
-  {0b11111,0b11111,0b11111,0b11111,0b11111,0b11111,0b11111,0b11111}, // 5: Full block
-  {0b00011,0b00011,0b00011,0b00011,0b00011,0b00011,0b00011,0b00011}, // 6: Center left marker (2 pixels on RIGHT side)
-  {0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000}  // 7: Center right marker (2 pixels on LEFT side)
+// Patterns for filling from LEFT to RIGHT (used for right side of screen)
+const uint8_t fillPatternsLTR[5] = {
+  0b00000, // 0 pixels
+  0b10000, // 1 pixel
+  0b11000, // 2 pixels
+  0b11100, // 3 pixels
+  0b11110  // 4 pixels
 };
+
+// Character slot assignments
+#define CHAR_VOLT_PARTIAL 1
+#define CHAR_POS_PARTIAL  2
+#define CHAR_FULL_BLOCK   3
+#define CHAR_CENTER_LEFT  4
+#define CHAR_CENTER_RIGHT 5
+
+// Static bitmaps
+const uint8_t bitmapFullBlock[8]   = {0b11111,0b11111,0b11111,0b11111,0b11111,0b11111,0b11111,0b11111};
+const uint8_t bitmapCenterLeft[8]  = {0b00011,0b00011,0b00011,0b00011,0b00011,0b00011,0b00011,0b00011};
+const uint8_t bitmapCenterRight[8] = {0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000,0b11000};
 
 
 // ====================================================================
@@ -731,11 +738,6 @@ void quickUpdateDisplayBuffered() {
         }
 
         if (isVoltageLeftOfCenter != lastVoltageGraphDirectionLeft) {
-            if (isVoltageLeftOfCenter) {
-                for (int i = 0; i < 8; i++) lcd.createChar(i, barChars[i]);
-            } else {
-                for (int i = 0; i < 8; i++) lcd.createChar(i, barCharsMirrored[i]);
-            }
             lastVoltageGraphDirectionLeft = isVoltageLeftOfCenter;
             lastDisplayedPosition = -1;
         }
@@ -785,11 +787,6 @@ void quickUpdateDisplayBuffered() {
     }
 
     if (isLeftOfCenter != lastPosGraphDirectionLeft) {
-        if (isLeftOfCenter) {
-            for (int i = 0; i < 8; i++) lcd.createChar(i, barChars[i]);
-        } else {
-            for (int i = 0; i < 8; i++) lcd.createChar(i, barCharsMirrored[i]);
-        }
         lastPosGraphDirectionLeft = isLeftOfCenter;
         lastDisplayedPosition = -1;
     }
@@ -837,67 +834,66 @@ void buildVoltageBarGraph(char* buffer) {
 
     if (isLeftOfCenter_disp) {
         // ============================================================
-        // FILLING LEFT FROM CENTER
+        // FILLING LEFT FROM CENTER (Positions 0 to 9)
         // ============================================================
         
+        // Use RTL pattern for left side
+        updateDynamicChar(CHAR_VOLT_PARTIAL, partialFill, false);
+
         // Fill full characters going left from position 8 to 0
         for (int i = 8; i >= 8 - fullChars + 1 && i >= 0; i--) {
-            buffer[i] = 5; // Full block
+            buffer[i] = CHAR_FULL_BLOCK;
         }
         
         // Add partial character at the edge
         if (fullChars > 0 && fullChars < 9) {
             int partialPos = 8 - fullChars;
             if (partialPos >= 0 && partialFill > 0) {
-                buffer[partialPos] = (char)partialFill;
+                buffer[partialPos] = CHAR_VOLT_PARTIAL;
             }
         }
         
         // Position 9: Show center line ONLY if no fill, otherwise show full block
         if (fullChars > 0) {
-            buffer[9] = 5;  // Full block covers the center line
+            buffer[9] = CHAR_FULL_BLOCK;
         } else if (partialFill > 0) {
-            // Partial fill at center - combine center line with partial fill
-            // Use character that shows fill growing from the 2-pixel line
-            buffer[9] = (char)partialFill;
+            buffer[9] = CHAR_VOLT_PARTIAL;
         } else {
-            // No fill - show just center line
-            buffer[9] = 6;  // 2-pixel line on right side
+            buffer[9] = CHAR_CENTER_LEFT;
         }
         
-        // Position 10: Always show center line (right side)
-        buffer[10] = 7;  // 2-pixel line on left side
+        buffer[10] = CHAR_CENTER_RIGHT;
         
     } else {
         // ============================================================
-        // FILLING RIGHT FROM CENTER
+        // FILLING RIGHT FROM CENTER (Positions 10 to 19)
         // ============================================================
         
+        // Use LTR pattern for right side
+        updateDynamicChar(CHAR_VOLT_PARTIAL, partialFill, true);
+
         // Fill full characters going right from position 11 to 19
         for (int i = 11; i <= 11 + fullChars - 1 && i < 20; i++) {
-            buffer[i] = 5; // Full block
+            buffer[i] = CHAR_FULL_BLOCK;
         }
         
         // Add partial character at the edge
         if (fullChars > 0 && fullChars < 9) {
             int partialPos = 11 + fullChars;
             if (partialPos < 20 && partialFill > 0) {
-                buffer[partialPos] = (char)partialFill;
+                buffer[partialPos] = CHAR_VOLT_PARTIAL;
             }
         }
         
-        // Position 9: Always show center line (left side)
-        buffer[9] = 6;  // 2-pixel line on right side
+        buffer[9] = CHAR_CENTER_LEFT;
         
         // Position 10: Show center line ONLY if no fill, otherwise show full block
         if (fullChars > 0) {
-            buffer[10] = 5;  // Full block covers the center line
+            buffer[10] = CHAR_FULL_BLOCK;
         } else if (partialFill > 0) {
-            // Partial fill at center - combine center line with partial fill
-            buffer[10] = (char)partialFill;
+            buffer[10] = CHAR_VOLT_PARTIAL;
         } else {
-            // No fill - show just center line
-            buffer[10] = 7;  // 2-pixel line on left side
+            buffer[10] = CHAR_CENTER_RIGHT;
         }
     }
 }
@@ -948,63 +944,66 @@ void buildPositionGraph(char* buffer) {
     
     if (isLeftOfCenter) {
         // ============================================================
-        // FILLING LEFT FROM CENTER
+        // FILLING LEFT FROM CENTER (Positions 0 to 9)
         // ============================================================
         
+        // Use RTL pattern for left side
+        updateDynamicChar(CHAR_POS_PARTIAL, partialFill, false);
+
         // Fill full characters going left from position 8 to 0
         for (int i = 8; i >= 8 - fullChars + 1 && i >= 0; i--) {
-            buffer[i] = 5; // Full block
+            buffer[i] = CHAR_FULL_BLOCK;
         }
         
         // Add partial character at the edge
         if (fullChars > 0 && fullChars < 9) {
             int partialPos = 8 - fullChars;
             if (partialPos >= 0 && partialFill > 0) {
-                buffer[partialPos] = (char)partialFill;
+                buffer[partialPos] = CHAR_POS_PARTIAL;
             }
         }
         
         // Position 9: Show center line ONLY if no fill, otherwise show full block
         if (fullChars > 0) {
-            buffer[9] = 5;  // Full block covers the center line
+            buffer[9] = CHAR_FULL_BLOCK;
         } else if (partialFill > 0) {
-            buffer[9] = (char)partialFill;
+            buffer[9] = CHAR_POS_PARTIAL;
         } else {
-            buffer[9] = 6;  // 2-pixel line on right side
+            buffer[9] = CHAR_CENTER_LEFT;
         }
         
-        // Position 10: Always show center line (right side)
-        buffer[10] = 7;  // 2-pixel line on left side
+        buffer[10] = CHAR_CENTER_RIGHT;
         
     } else {
         // ============================================================
-        // FILLING RIGHT FROM CENTER
+        // FILLING RIGHT FROM CENTER (Positions 10 to 19)
         // ============================================================
         
+        // Use LTR pattern for right side
+        updateDynamicChar(CHAR_POS_PARTIAL, partialFill, true);
+
         // Fill full characters going right from position 11 to 19
         for (int i = 11; i <= 11 + fullChars - 1 && i < 20; i++) {
-            buffer[i] = 5; // Full block
+            buffer[i] = CHAR_FULL_BLOCK;
         }
         
         // Add partial character at the edge
         if (fullChars > 0 && fullChars < 9) {
             int partialPos = 11 + fullChars;
             if (partialPos < 20 && partialFill > 0) {
-                buffer[partialPos] = (char)partialFill;
+                buffer[partialPos] = CHAR_POS_PARTIAL;
             }
         }
         
-        // Position 9: Always show center line (left side)
-        buffer[9] = 6;  // 2-pixel line on right side
+        buffer[9] = CHAR_CENTER_LEFT;
         
         // Position 10: Show center line ONLY if no fill, otherwise show full block
         if (fullChars > 0) {
-            buffer[10] = 5;  // Full block covers the center line
+            buffer[10] = CHAR_FULL_BLOCK;
         } else if (partialFill > 0) {
-            buffer[10] = (char)partialFill;
+            buffer[10] = CHAR_POS_PARTIAL;
         } else {
-            // No fill - show just center line
-            buffer[10] = 7;  // 2-pixel line on left side
+            buffer[10] = CHAR_CENTER_RIGHT;
         }
     }
 }
@@ -2456,192 +2455,6 @@ void getMenuValueString(int idx, char* buffer) {
 // OPTIMIZED DISPLAY FUNCTIONS
 // ====================================================================
 
-/**
- * Fast voltage bar graph for both modes
- * Optimized to reduce LCD operations
- */
-void displayVoltageBarGraphFast() {
-  // Only update if voltage changed significantly
-  char voltageStr[7];
-  dtostrf(input, 4, 2, voltageStr);
-  
-  if (strcmp(voltageStr, lastVoltageStr) == 0 && 
-      millis() - lastBargraphUpdate < 50) {
-    return; // Skip update if voltage hasn't changed much
-  }
-  
-  // Define voltage range and center
-  const float VOLTAGE_MIN = 2.48;
-  const float VOLTAGE_MAX = 6.0;
-  const float VOLTAGE_CENTER = 4.25;
- 
-  // Constrain input to valid range
-  float constrainedVoltage = constrain(input, VOLTAGE_MIN, VOLTAGE_MAX);
- 
-  // Calculate distance from center
-  float distanceFromCenter = constrainedVoltage - VOLTAGE_CENTER;
-  float voltageRange = VOLTAGE_MAX - VOLTAGE_MIN;
-  float halfRange = voltageRange / 2.0;
- 
-  // Map to display positions (0-19, with center at position 9-10)
-  float normalizedPosition = (distanceFromCenter / halfRange) * 10.0; // -10 to +10
-  int voltagePosition = 10 + (int)normalizedPosition; // 0 to 20
-  voltagePosition = constrain(voltagePosition, 0, 19);
- 
-  // Only update the line if position changed significantly
-  if (abs(voltagePosition - lastDisplayedPosition) < 1 && 
-      millis() - lastBargraphUpdate < 50) {
-    return; // Skip update if position hasn't changed much
-  }
-  
-  // Clear line 0 first
-  lcd.setCursor(0, 0);
-  for (int i = 0; i < 20; i++) {
-    lcd.write(' ');
-  }
-  
-  // Draw center markers
-  lcd.setCursor(9, 0);
-  lcd.write((uint8_t)6); // Center left marker
-  lcd.setCursor(10, 0);
-  lcd.write((uint8_t)7); // Center right marker
- 
-  // Calculate how many characters to fill
-  int fullChars = abs((int)normalizedPosition);
-  if (fullChars > 9) fullChars = 9;
- 
-  // Calculate partial fill
-  float remainder = abs(normalizedPosition) - fullChars;
-  int partialFill = (int)(remainder * 5.0);
-  partialFill = constrain(partialFill, 0, 5);
- 
-  // Determine direction for custom characters
-  bool isLeftOfCenter = constrainedVoltage < VOLTAGE_CENTER;
-  static bool lastDirection = true;
- 
-  // Update custom characters ONLY if direction changed (less frequent)
-  if (isLeftOfCenter != lastDirection) {
-    if (isLeftOfCenter) {
-      for (int i = 0; i < 8; i++) lcd.createChar(i, barChars[i]);
-    } else {
-      for (int i = 0; i < 8; i++) lcd.createChar(i, barCharsMirrored[i]);
-    }
-    lastDirection = isLeftOfCenter;
-  }
- 
-  // Draw the bar graph
-  for (int i = 0; i < 10; i++) {
-    int lcdPos = isLeftOfCenter ? (9 - i) : (10 + i);
-    lcd.setCursor(lcdPos, 0);
-   
-    if (i < fullChars) {
-      lcd.write((uint8_t)5); // Full block
-    } else if (i == fullChars) {
-      lcd.write((uint8_t)partialFill); // Partial fill
-    } else {
-      lcd.write((uint8_t)0); // Empty
-    }
-  }
-  
-  lastBargraphUpdate = millis();
-  lastDisplayedPosition = voltagePosition;
-}
-
-/**
- * Fast position bar graph for both modes
- * Optimized to reduce LCD operations
- */
-void displayPositionGraphFast() {
-  // Only update if position changed significantly
-  if (abs(currentPosition - lastDisplayedSteps) < 5 && 
-      millis() - lastPositionUpdate < 50) {
-    return; // Skip update if position hasn't changed much
-  }
-  
-  // First clear the entire second line
-  lcd.setCursor(0, 1);
-  for (int i = 0; i < 20; i++) {
-    lcd.write(' ');
-  }
-  
-  // Check conditions and display appropriate content
-  if (fullTravelSteps <= 0) {
-    lcd.setCursor(0, 1);
-    lcd.print(F("No Calibration"));
-    return;
-  }
-  
-  if (leftLimitState) {
-    lcd.setCursor(0, 1);
-    lcdPrint_P(STR_LEFT_LIMIT_ROMANIAN);
-    return;
-  }
-  
-  if (rightLimitState) {
-    lcd.setCursor(0, 1);
-    lcdPrint_P(STR_RIGHT_LIMIT_ROMANIAN);
-    return;
-  }
-  
-  // Draw center markers
-  lcd.setCursor(9, 1);
-  lcd.write((uint8_t)6); // Center left marker
-  lcd.setCursor(10, 1);
-  lcd.write((uint8_t)7); // Center right marker
-  
-  // Calculate bargraph position
-  long pos = currentPosition;
-  long centerPos = fullTravelSteps / 2;
-  
-  // Handle edge case where centerPos might be 0
-  if (centerPos <= 0) {
-    lcd.setCursor(0, 1);
-    lcd.print(F("Center:0"));
-    return;
-  }
-  
-  long distanceFromCenter = abs(pos - centerPos);
-  long stepsPerChar = centerPos / 10;
-  if (stepsPerChar <= 0) stepsPerChar = 1;
-  
-  int fullChars = (int)(distanceFromCenter / stepsPerChar);
-  if (fullChars > 9) fullChars = 9;
-  
-  long remainder = distanceFromCenter % stepsPerChar;
-  int partialFill = (int)map(remainder, 0, stepsPerChar, 0, 5);
-  
-  bool isLeftOfCenter = pos < centerPos;
-  
-  // Determine direction and set appropriate custom characters
-  static bool lastPosDirection = true;
-  if (isLeftOfCenter != lastPosDirection) {
-    if (isLeftOfCenter) {
-      // Position is left of center - use left-filling characters
-      for (int i = 0; i < 8; i++) lcd.createChar(i, barChars[i]);
-    } else {
-      // Position is right of center - use right-filling characters
-      for (int i = 0; i < 8; i++) lcd.createChar(i, barCharsMirrored[i]);
-    }
-    lastPosDirection = isLeftOfCenter;
-  }
-  
-  // Draw the bargraph
-  for (int i = 0; i < 10; i++) {
-    int lcdPos = isLeftOfCenter ? (9 - i) : (10 + i);
-    lcd.setCursor(lcdPos, 1);
-    
-    if (i < fullChars) {
-      lcd.write((uint8_t)5); // Full block
-    } else if (i == fullChars) {
-      lcd.write((uint8_t)partialFill); // Partial fill
-    } else {
-      lcd.write((uint8_t)0); // Empty
-    }
-  }
-  
-  lastPositionUpdate = millis();
-  lastDisplayedSteps = currentPosition;
-}
 
 // ====================================================================
 // LIMIT SWITCH FUNCTION
@@ -3530,8 +3343,48 @@ void handleMenuSystem() {
  * Creates custom bar graph characters in LCD memory
  */
 void createBarGraphChars() {
-  for (int i = 0; i < 8; i++) {
-    lcd.createChar(i, barChars[i]);
+  lcd.createChar(CHAR_FULL_BLOCK, (uint8_t*)bitmapFullBlock);
+  lcd.createChar(CHAR_CENTER_LEFT, (uint8_t*)bitmapCenterLeft);
+  lcd.createChar(CHAR_CENTER_RIGHT, (uint8_t*)bitmapCenterRight);
+
+  // Initialize partial slots with empty
+  uint8_t empty[8] = {0};
+  lcd.createChar(CHAR_VOLT_PARTIAL, empty);
+  lcd.createChar(CHAR_POS_PARTIAL, empty);
+}
+
+/**
+ * Updates a dynamic custom character slot only if the pattern changed
+ * @param slot LCD custom character slot (1 or 2)
+ * @param fillLevel 1-4 pixels
+ * @param isLTR True for Left-to-Right fill, False for Right-to-Left
+ */
+void updateDynamicChar(int slot, int fillLevel, bool isLTR) {
+  static int lastVoltLevel = -1;
+  static bool lastVoltLTR = false;
+  static int lastPosLevel = -1;
+  static bool lastPosLTR = false;
+
+  bool changed = false;
+  if (slot == CHAR_VOLT_PARTIAL) {
+    if (fillLevel != lastVoltLevel || isLTR != lastVoltLTR) {
+      lastVoltLevel = fillLevel;
+      lastVoltLTR = isLTR;
+      changed = true;
+    }
+  } else if (slot == CHAR_POS_PARTIAL) {
+    if (fillLevel != lastPosLevel || isLTR != lastPosLTR) {
+      lastPosLevel = fillLevel;
+      lastPosLTR = isLTR;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    uint8_t bitmap[8];
+    uint8_t pattern = isLTR ? fillPatternsLTR[constrain(fillLevel, 0, 4)] : fillPatternsRTL[constrain(fillLevel, 0, 4)];
+    for (int i = 0; i < 8; i++) bitmap[i] = pattern;
+    lcd.createChar(slot, bitmap);
   }
 }
 
