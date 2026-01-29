@@ -434,6 +434,7 @@ uint16_t calculateChecksum(Settings& settings);
 // CONTROL SYSTEM VARIABLES
 // ====================================================================
 double input = 0;              // PID input (sensor voltage)
+double displayInput = 4.25;    // Smoothed sensor voltage for display
 double output = 0;             // PID output (stepper speed)
 PID myPID(&input, &output, &setPoint, Kp, Ki, Kd, pidDirection);
 
@@ -623,9 +624,9 @@ void updateLcdNonBlocking() {
   switch(lcdState) {
     case LCD_IDLE:
       if (lcdNeedsUpdate) {
-        // Check what needs to be updated
-        bool line0Changed = (strncmp(lcdLine0, lcdNewLine0, 20) != 0);
-        bool line1Changed = (strncmp(lcdLine1, lcdNewLine1, 20) != 0);
+        // Check what needs to be updated using memcmp to support character code 0
+        bool line0Changed = (memcmp(lcdLine0, lcdNewLine0, 20) != 0);
+        bool line1Changed = (memcmp(lcdLine1, lcdNewLine1, 20) != 0);
         
         if (line0Changed || line1Changed) {
           lcdUpdateInProgress = true;
@@ -683,9 +684,9 @@ void updateLcdNonBlocking() {
 
 // Set LCD content (buffered, non-blocking)
 void setLcdContent(const char* line0, const char* line1) {
-  // Copy to new buffer
-  strncpy(lcdNewLine0, line0, 20);
-  strncpy(lcdNewLine1, line1, 20);
+  // Copy to new buffer using memcpy to support character code 0
+  memcpy(lcdNewLine0, line0, 20);
+  memcpy(lcdNewLine1, line1, 20);
   lcdNewLine0[20] = '\0';
   lcdNewLine1[20] = '\0';
   
@@ -720,7 +721,14 @@ void quickUpdateDisplayBuffered() {
     if (showVoltageBarGraph) {
         // === VOLTAGE BARGRAPH ===
         const float VOLTAGE_CENTER = 4.25;
-        bool isVoltageLeftOfCenter = (input < VOLTAGE_CENTER);
+        const float VOLTAGE_HYSTERESIS = 0.02; // 20mV hysteresis
+
+        static bool isVoltageLeftOfCenter = true;
+        if (isVoltageLeftOfCenter) {
+            if (displayInput > VOLTAGE_CENTER + VOLTAGE_HYSTERESIS) isVoltageLeftOfCenter = false;
+        } else {
+            if (displayInput < VOLTAGE_CENTER - VOLTAGE_HYSTERESIS) isVoltageLeftOfCenter = true;
+        }
 
         if (isVoltageLeftOfCenter != lastVoltageGraphDirectionLeft) {
             if (isVoltageLeftOfCenter) {
@@ -736,10 +744,10 @@ void quickUpdateDisplayBuffered() {
     } else {
         // === TEXT DISPLAY ===
         char voltageStr[7];
-        if (input < 0.0 || input > 6.0) {
+        if (displayInput < 0.0 || displayInput > 6.0) {
             strncpy(voltageStr, "x.xx", 7);
         } else {
-            dtostrf(input, 4, 2, voltageStr);
+            dtostrf(displayInput, 4, 2, voltageStr);
         }
         voltageStr[6] = '\0';
         
@@ -764,10 +772,16 @@ void quickUpdateDisplayBuffered() {
     }
 
     // === POSITION BARGRAPH ===
-    bool isLeftOfCenter = false;
+    static bool isLeftOfCenter = true;
     if (fullTravelSteps > 0) {
         long centerPos = fullTravelSteps / 2;
-        isLeftOfCenter = (currentPosition < centerPos);
+        long posHysteresis = 10; // 10 steps hysteresis
+
+        if (isLeftOfCenter) {
+            if (currentPosition > centerPos + posHysteresis) isLeftOfCenter = false;
+        } else {
+            if (currentPosition < centerPos - posHysteresis) isLeftOfCenter = true;
+        }
     }
 
     if (isLeftOfCenter != lastPosGraphDirectionLeft) {
@@ -798,13 +812,13 @@ void buildVoltageBarGraph(char* buffer) {
     const float VOLTAGE_MAX = 6.0;
     const float VOLTAGE_CENTER = 4.25;
 
-    if (input < VOLTAGE_MIN || input > VOLTAGE_MAX) {
+    if (displayInput < VOLTAGE_MIN || displayInput > VOLTAGE_MAX) {
         strncpy(buffer, "Sensor Out of Range", 20);
         return;
     }
 
     // Calculate distance from center
-    float distanceFromCenter = input - VOLTAGE_CENTER;
+    float distanceFromCenter = displayInput - VOLTAGE_CENTER;
     float halfRange = (VOLTAGE_MAX - VOLTAGE_MIN) / 2.0;
     float normalizedDistance = fabs(distanceFromCenter) / halfRange; // 0.0 to 1.0+
     
@@ -818,9 +832,10 @@ void buildVoltageBarGraph(char* buffer) {
     int partialFill = (int)(remainder * 5.0);
     partialFill = constrain(partialFill, 0, 5);
 
-    bool isLeftOfCenter = (input < VOLTAGE_CENTER);
+    // Use the same direction state as the character set to avoid mirroring glitches
+    bool isLeftOfCenter_disp = lastVoltageGraphDirectionLeft;
 
-    if (isLeftOfCenter) {
+    if (isLeftOfCenter_disp) {
         // ============================================================
         // FILLING LEFT FROM CENTER
         // ============================================================
@@ -833,8 +848,8 @@ void buildVoltageBarGraph(char* buffer) {
         // Add partial character at the edge
         if (fullChars > 0 && fullChars < 9) {
             int partialPos = 8 - fullChars;
-            if (partialPos >= 0) {
-                buffer[partialPos] = partialFill;
+            if (partialPos >= 0 && partialFill > 0) {
+                buffer[partialPos] = (char)partialFill;
             }
         }
         
@@ -844,7 +859,7 @@ void buildVoltageBarGraph(char* buffer) {
         } else if (partialFill > 0) {
             // Partial fill at center - combine center line with partial fill
             // Use character that shows fill growing from the 2-pixel line
-            buffer[9] = partialFill;
+            buffer[9] = (char)partialFill;
         } else {
             // No fill - show just center line
             buffer[9] = 6;  // 2-pixel line on right side
@@ -866,8 +881,8 @@ void buildVoltageBarGraph(char* buffer) {
         // Add partial character at the edge
         if (fullChars > 0 && fullChars < 9) {
             int partialPos = 11 + fullChars;
-            if (partialPos < 20) {
-                buffer[partialPos] = partialFill;
+            if (partialPos < 20 && partialFill > 0) {
+                buffer[partialPos] = (char)partialFill;
             }
         }
         
@@ -879,7 +894,7 @@ void buildVoltageBarGraph(char* buffer) {
             buffer[10] = 5;  // Full block covers the center line
         } else if (partialFill > 0) {
             // Partial fill at center - combine center line with partial fill
-            buffer[10] = partialFill;
+            buffer[10] = (char)partialFill;
         } else {
             // No fill - show just center line
             buffer[10] = 7;  // 2-pixel line on left side
@@ -944,8 +959,8 @@ void buildPositionGraph(char* buffer) {
         // Add partial character at the edge
         if (fullChars > 0 && fullChars < 9) {
             int partialPos = 8 - fullChars;
-            if (partialPos >= 0) {
-                buffer[partialPos] = partialFill;
+            if (partialPos >= 0 && partialFill > 0) {
+                buffer[partialPos] = (char)partialFill;
             }
         }
         
@@ -953,7 +968,7 @@ void buildPositionGraph(char* buffer) {
         if (fullChars > 0) {
             buffer[9] = 5;  // Full block covers the center line
         } else if (partialFill > 0) {
-            buffer[9] = partialFill;
+            buffer[9] = (char)partialFill;
         } else {
             buffer[9] = 6;  // 2-pixel line on right side
         }
@@ -974,8 +989,8 @@ void buildPositionGraph(char* buffer) {
         // Add partial character at the edge
         if (fullChars > 0 && fullChars < 9) {
             int partialPos = 11 + fullChars;
-            if (partialPos < 20) {
-                buffer[partialPos] = partialFill;
+            if (partialPos < 20 && partialFill > 0) {
+                buffer[partialPos] = (char)partialFill;
             }
         }
         
@@ -986,8 +1001,9 @@ void buildPositionGraph(char* buffer) {
         if (fullChars > 0) {
             buffer[10] = 5;  // Full block covers the center line
         } else if (partialFill > 0) {
-            buffer[10] = partialFill;
+            buffer[10] = (char)partialFill;
         } else {
+            // No fill - show just center line
             buffer[10] = 7;  // 2-pixel line on left side
         }
     }
@@ -1362,6 +1378,21 @@ void updateVoltageReading() {
     // Validate and update
     if (Vin >= 0.0 && Vin <= 6.0) {
       input = Vin;
+
+      // Update display averaged value (EMA filter for stability)
+      // Time constant of ~1 second
+      static unsigned long lastAvgUpdate = 0;
+      unsigned long nowAvg = millis();
+      if (lastAvgUpdate == 0) lastAvgUpdate = nowAvg;
+      float dt = (nowAvg - lastAvgUpdate) / 1000.0;
+      lastAvgUpdate = nowAvg;
+
+      float timeConstant = 1.0; // 1 second averaging
+      float alpha = dt / (timeConstant + dt);
+      if (alpha > 1.0) alpha = 1.0;
+      if (alpha < 0.0) alpha = 0.0;
+
+      displayInput = (displayInput * (1.0 - alpha)) + (Vin * alpha);
     }
   }
 }
