@@ -691,9 +691,18 @@ void updateLcdNonBlocking() {
 
 // Set LCD content (buffered, non-blocking)
 void setLcdContent(const char* line0, const char* line1) {
-  // Copy to new buffer using memcpy to support character code 0
-  memcpy(lcdNewLine0, line0, 20);
-  memcpy(lcdNewLine1, line1, 20);
+  // Safe copy with space padding to support character code 0 and prevent reading past short strings
+  const char* p0 = line0;
+  const char* p1 = line1;
+
+  for (int i = 0; i < 20; i++) {
+    if (p0 && *p0 != '\0') lcdNewLine0[i] = *p0++;
+    else lcdNewLine0[i] = ' ';
+
+    if (p1 && *p1 != '\0') lcdNewLine1[i] = *p1++;
+    else lcdNewLine1[i] = ' ';
+  }
+
   lcdNewLine0[20] = '\0';
   lcdNewLine1[20] = '\0';
   
@@ -810,91 +819,71 @@ void buildVoltageBarGraph(char* buffer) {
     const float VOLTAGE_CENTER = 4.25;
 
     if (displayInput < VOLTAGE_MIN || displayInput > VOLTAGE_MAX) {
-        strncpy(buffer, "Sensor Out of Range", 20);
+        const char* msg = "Sensor Out of Range";
+        for (int i = 0; i < 20 && msg[i]; i++) buffer[i] = msg[i];
         return;
     }
 
-    // Calculate distance from center
-    float distanceFromCenter = displayInput - VOLTAGE_CENTER;
+    // Calculate total pixels from center (Max 48 pixels growth per side)
+    float distanceFromCenter = fabs(displayInput - VOLTAGE_CENTER);
     float halfRange = (VOLTAGE_MAX - VOLTAGE_MIN) / 2.0;
-    float normalizedDistance = fabs(distanceFromCenter) / halfRange; // 0.0 to 1.0+
-    
-    // Map to character positions (0-9 chars from center)
-    float charDistance = normalizedDistance * 9.0;  // 9 chars available on each side (positions 0-8 or 11-19)
-    
-    int fullChars = (int)charDistance;
-    if (fullChars > 9) fullChars = 9;
-    
-    float remainder = charDistance - fullChars;
-    int partialFill = (int)(remainder * 5.0);
-    partialFill = constrain(partialFill, 0, 5);
+    int totalPixels = (int)map(distanceFromCenter * 1000, 0, halfRange * 1000, 0, 48);
+    totalPixels = constrain(totalPixels, 0, 48);
 
-    // Use the same direction state as the character set to avoid mirroring glitches
     bool isLeftOfCenter_disp = lastVoltageGraphDirectionLeft;
 
     if (isLeftOfCenter_disp) {
-        // ============================================================
-        // FILLING LEFT FROM CENTER (Positions 0 to 9)
-        // ============================================================
+        // FILL LEFT: Chars 9 down to 0
+        int growPixels = totalPixels;
         
-        // Use RTL pattern for left side
-        updateDynamicChar(CHAR_VOLT_PARTIAL, partialFill, false);
-
-        // Fill full characters going left from position 8 to 0
-        for (int i = 8; i >= 8 - fullChars + 1 && i >= 0; i--) {
-            buffer[i] = CHAR_FULL_BLOCK;
-        }
-        
-        // Add partial character at the edge
-        if (fullChars > 0 && fullChars < 9) {
-            int partialPos = 8 - fullChars;
-            if (partialPos >= 0 && partialFill > 0) {
-                buffer[partialPos] = CHAR_VOLT_PARTIAL;
-            }
-        }
-        
-        // Position 9: Show center line ONLY if no fill, otherwise show full block
-        if (fullChars > 0) {
-            buffer[9] = CHAR_FULL_BLOCK;
-        } else if (partialFill > 0) {
+        // Char 9 (Base 2 pixels)
+        int c9 = growPixels > 3 ? 3 : growPixels;
+        if (c9 == 0) buffer[9] = CHAR_CENTER_LEFT;
+        else if (c9 == 3) buffer[9] = CHAR_FULL_BLOCK;
+        else {
+            updateDynamicChar(CHAR_VOLT_PARTIAL, 2 + c9, false);
             buffer[9] = CHAR_VOLT_PARTIAL;
-        } else {
-            buffer[9] = CHAR_CENTER_LEFT;
         }
         
-        buffer[10] = CHAR_CENTER_RIGHT;
-        
-    } else {
-        // ============================================================
-        // FILLING RIGHT FROM CENTER (Positions 10 to 19)
-        // ============================================================
-        
-        // Use LTR pattern for right side
-        updateDynamicChar(CHAR_VOLT_PARTIAL, partialFill, true);
-
-        // Fill full characters going right from position 11 to 19
-        for (int i = 11; i <= 11 + fullChars - 1 && i < 20; i++) {
-            buffer[i] = CHAR_FULL_BLOCK;
-        }
-        
-        // Add partial character at the edge
-        if (fullChars > 0 && fullChars < 9) {
-            int partialPos = 11 + fullChars;
-            if (partialPos < 20 && partialFill > 0) {
-                buffer[partialPos] = CHAR_VOLT_PARTIAL;
+        growPixels -= c9;
+        for (int c = 8; c >= 0; c--) {
+            if (growPixels <= 0) break;
+            if (growPixels >= 5) {
+                buffer[c] = CHAR_FULL_BLOCK;
+                growPixels -= 5;
+            } else {
+                updateDynamicChar(CHAR_VOLT_PARTIAL, growPixels, false);
+                buffer[c] = CHAR_VOLT_PARTIAL;
+                growPixels = 0;
             }
         }
+        buffer[10] = CHAR_CENTER_RIGHT;
+    } else {
+        // FILL RIGHT: Chars 10 up to 19
+        int growPixels = totalPixels;
         
-        buffer[9] = CHAR_CENTER_LEFT;
-        
-        // Position 10: Show center line ONLY if no fill, otherwise show full block
-        if (fullChars > 0) {
-            buffer[10] = CHAR_FULL_BLOCK;
-        } else if (partialFill > 0) {
+        // Char 10 (Base 2 pixels)
+        int c10 = growPixels > 3 ? 3 : growPixels;
+        if (c10 == 0) buffer[10] = CHAR_CENTER_RIGHT;
+        else if (c10 == 3) buffer[10] = CHAR_FULL_BLOCK;
+        else {
+            updateDynamicChar(CHAR_VOLT_PARTIAL, 2 + c10, true);
             buffer[10] = CHAR_VOLT_PARTIAL;
-        } else {
-            buffer[10] = CHAR_CENTER_RIGHT;
         }
+        
+        growPixels -= c10;
+        for (int c = 11; c < 20; c++) {
+            if (growPixels <= 0) break;
+            if (growPixels >= 5) {
+                buffer[c] = CHAR_FULL_BLOCK;
+                growPixels -= 5;
+            } else {
+                updateDynamicChar(CHAR_VOLT_PARTIAL, growPixels, true);
+                buffer[c] = CHAR_VOLT_PARTIAL;
+                growPixels = 0;
+            }
+        }
+        buffer[9] = CHAR_CENTER_LEFT;
     }
 }
 
@@ -907,104 +896,89 @@ void buildPositionGraph(char* buffer) {
     buffer[20] = '\0';
     
     if (fullTravelSteps <= 0) {
-        strncpy(buffer, "No Calibration   ", 20);
+        const char* msg = "No Calibration";
+        for (int i = 0; i < 20 && msg[i]; i++) buffer[i] = msg[i];
         return;
     }
     
     if (leftLimitState) {
-        strncpy(buffer, "<<< LIMITA STANGA", 20);
+        const char* msg = "<<< LIMITA STANGA";
+        for (int i = 0; i < 20 && msg[i]; i++) buffer[i] = msg[i];
         return;
     }
     
     if (rightLimitState) {
-        strncpy(buffer, "LIMITA DREAPTA >>>", 20);
+        const char* msg = "LIMITA DREAPTA >>>";
+        for (int i = 0; i < 20 && msg[i]; i++) buffer[i] = msg[i];
         return;
     }
     
-    // Calculate position
-    long pos = currentPosition;
     long centerPos = fullTravelSteps / 2;
-    
     if (centerPos <= 0) {
-        strncpy(buffer, "Center:0         ", 20);
+        const char* msg = "Center:0";
+        for (int i = 0; i < 20 && msg[i]; i++) buffer[i] = msg[i];
         return;
     }
-    
-    long distanceFromCenter = abs(pos - centerPos);
-    long stepsPerChar = centerPos / 9;  // 9 chars available on each side
-    if (stepsPerChar <= 0) stepsPerChar = 1;
-    
-    int fullChars = (int)(distanceFromCenter / stepsPerChar);
-    if (fullChars > 9) fullChars = 9;
-    
-    long remainder = distanceFromCenter % stepsPerChar;
-    int partialFill = (int)map(remainder, 0, stepsPerChar, 0, 5);
-    
-    bool isLeftOfCenter = pos < centerPos;
-    
+
+    // Calculate total pixels from center (Max 48 pixels growth per side)
+    long distanceFromCenter = abs(currentPosition - centerPos);
+    int totalPixels = (int)map(distanceFromCenter, 0, centerPos, 0, 48);
+    totalPixels = constrain(totalPixels, 0, 48);
+
+    bool isLeftOfCenter = currentPosition < centerPos;
+
     if (isLeftOfCenter) {
-        // ============================================================
-        // FILLING LEFT FROM CENTER (Positions 0 to 9)
-        // ============================================================
+        // FILL LEFT: Chars 9 down to 0
+        int growPixels = totalPixels;
         
-        // Use RTL pattern for left side
-        updateDynamicChar(CHAR_POS_PARTIAL, partialFill, false);
-
-        // Fill full characters going left from position 8 to 0
-        for (int i = 8; i >= 8 - fullChars + 1 && i >= 0; i--) {
-            buffer[i] = CHAR_FULL_BLOCK;
-        }
-        
-        // Add partial character at the edge
-        if (fullChars > 0 && fullChars < 9) {
-            int partialPos = 8 - fullChars;
-            if (partialPos >= 0 && partialFill > 0) {
-                buffer[partialPos] = CHAR_POS_PARTIAL;
-            }
-        }
-        
-        // Position 9: Show center line ONLY if no fill, otherwise show full block
-        if (fullChars > 0) {
-            buffer[9] = CHAR_FULL_BLOCK;
-        } else if (partialFill > 0) {
+        // Char 9 (Base 2 pixels)
+        int c9 = growPixels > 3 ? 3 : growPixels;
+        if (c9 == 0) buffer[9] = CHAR_CENTER_LEFT;
+        else if (c9 == 3) buffer[9] = CHAR_FULL_BLOCK;
+        else {
+            updateDynamicChar(CHAR_POS_PARTIAL, 2 + c9, false);
             buffer[9] = CHAR_POS_PARTIAL;
-        } else {
-            buffer[9] = CHAR_CENTER_LEFT;
         }
         
-        buffer[10] = CHAR_CENTER_RIGHT;
-        
-    } else {
-        // ============================================================
-        // FILLING RIGHT FROM CENTER (Positions 10 to 19)
-        // ============================================================
-        
-        // Use LTR pattern for right side
-        updateDynamicChar(CHAR_POS_PARTIAL, partialFill, true);
-
-        // Fill full characters going right from position 11 to 19
-        for (int i = 11; i <= 11 + fullChars - 1 && i < 20; i++) {
-            buffer[i] = CHAR_FULL_BLOCK;
-        }
-        
-        // Add partial character at the edge
-        if (fullChars > 0 && fullChars < 9) {
-            int partialPos = 11 + fullChars;
-            if (partialPos < 20 && partialFill > 0) {
-                buffer[partialPos] = CHAR_POS_PARTIAL;
+        growPixels -= c9;
+        for (int c = 8; c >= 0; c--) {
+            if (growPixels <= 0) break;
+            if (growPixels >= 5) {
+                buffer[c] = CHAR_FULL_BLOCK;
+                growPixels -= 5;
+            } else {
+                updateDynamicChar(CHAR_POS_PARTIAL, growPixels, false);
+                buffer[c] = CHAR_POS_PARTIAL;
+                growPixels = 0;
             }
         }
+        buffer[10] = CHAR_CENTER_RIGHT;
+    } else {
+        // FILL RIGHT: Chars 10 up to 19
+        int growPixels = totalPixels;
         
-        buffer[9] = CHAR_CENTER_LEFT;
-        
-        // Position 10: Show center line ONLY if no fill, otherwise show full block
-        if (fullChars > 0) {
-            buffer[10] = CHAR_FULL_BLOCK;
-        } else if (partialFill > 0) {
+        // Char 10 (Base 2 pixels)
+        int c10 = growPixels > 3 ? 3 : growPixels;
+        if (c10 == 0) buffer[10] = CHAR_CENTER_RIGHT;
+        else if (c10 == 3) buffer[10] = CHAR_FULL_BLOCK;
+        else {
+            updateDynamicChar(CHAR_POS_PARTIAL, 2 + c10, true);
             buffer[10] = CHAR_POS_PARTIAL;
-        } else {
-            buffer[10] = CHAR_CENTER_RIGHT;
         }
+        
+        growPixels -= c10;
+        for (int c = 11; c < 20; c++) {
+            if (growPixels <= 0) break;
+            if (growPixels >= 5) {
+                buffer[c] = CHAR_FULL_BLOCK;
+                growPixels -= 5;
+            } else {
+                updateDynamicChar(CHAR_POS_PARTIAL, growPixels, true);
+                buffer[c] = CHAR_POS_PARTIAL;
+                growPixels = 0;
+            }
+        }
+        buffer[9] = CHAR_CENTER_LEFT;
     }
 }
 
@@ -3476,6 +3450,13 @@ void setup() {
   lastHandledEncoderPos = myEnc.read();
   lastUpdateTime = millis();
   voltageReadTimer = millis();
+
+  // Initialize voltage readings to avoid "glide" on startup
+  float startAdc = analogRead(A0);
+  float startVout = (startAdc / 1023.0) * 5.0;
+  input = startVout * (R1 + R2) / R2;
+  displayInput = input;
+
   wdt_enable(WDTO_8S);
  
   // Reset position tracking
