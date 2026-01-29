@@ -1340,44 +1340,35 @@ void setStepperSpeedsForMode() {
 // ====================================================================
 
 /**
- * Reads and filters sensor voltage with different strategies for each mode
- * Auto mode: Single fast read for quick PID response
- * Manual mode: Average 3 samples for stable display
+ * Reads and filters sensor voltage.
+ * Uses 8-sample oversampling to reduce electrical noise for both control and display.
  */
 void updateVoltageReading() {
   unsigned long now = millis();
-  unsigned long readInterval = isManualMode ? VOLTAGE_READ_INTERVAL_MANUAL : VOLTAGE_READ_INTERVAL_AUTO;
  
-  if (now - voltageReadTimer >= readInterval) {
+  // Always read at fast interval (5ms) to keep PID responsive and filter smooth
+  if (now - voltageReadTimer >= VOLTAGE_READ_INTERVAL_AUTO) {
     voltageReadTimer = now;
    
-    float Vin;
-   
-    if (isManualMode) {
-      // Manual mode: Average 3 samples for stable display
-      long sum = 0;
-      for (int i = 0; i < 3; i++) {
-        sum += analogRead(A0);
-        delayMicroseconds(20);
-      }
-      float adcValue = sum / 3.0;
-      if (ADC_RESOLUTION <= 0) return;  //  SAFETY CHECK
-      float Vout = (adcValue / ADC_RESOLUTION) * ADC_REF_VOLTAGE;
-      Vin = Vout * (R1 + R2) / R2;
-    } else {
-      // Auto mode: Single fast read for quick PID response
-      if (ADC_RESOLUTION <= 0) return;  // SAFETY CHECK
-      float adcValue = analogRead(A0);
-      float Vout = (adcValue / ADC_RESOLUTION) * ADC_REF_VOLTAGE;
-      Vin = Vout * (R1 + R2) / R2;
+    // Oversampling: 8 samples averaged
+    long sum = 0;
+    for (int i = 0; i < 8; i++) {
+      sum += analogRead(A0);
+      delayMicroseconds(10);
     }
+    float adcValue = sum / 8.0;
+
+    if (ADC_RESOLUTION <= 0) return;  //  SAFETY CHECK
+    float Vout = (adcValue / ADC_RESOLUTION) * ADC_REF_VOLTAGE;
+    float Vin = Vout * (R1 + R2) / R2;
    
     // Validate and update
-    if (Vin >= 0.0 && Vin <= 6.0) {
+    if (Vin >= -0.5 && Vin <= 7.0) { // Accept slightly wider range to catch faults
       input = Vin;
 
       // SENSOR FAULT PROTECTION:
-      // If sensor reading is at absolute extreme rails, it likely indicates a broken wire.
+      // If sensor reading is at absolute extreme rails (e.g. <0.1V or >5.8V),
+      // it likely indicates a broken wire or short circuit.
       if (Vin < SENSOR_FAULT_MIN || Vin > SENSOR_FAULT_MAX) {
         if (sensorFaultCounter < 100) sensorFaultCounter++;
         if (sensorFaultCounter >= 50) sensorFault = true; // Sustained for ~250ms
@@ -3949,18 +3940,22 @@ void loop() {
   // TASK 8: Handle normal operation (moderate speed) - 50Hz
   // ====================================================================
   static unsigned long controlTimer = 0;
+  static bool wasNotAuto = true; // Tracks if we need to sync PID target position
+
   if (currentMillis - controlTimer >= 20 && menuState == NORMAL && !centeringActive) {
     controlTimer = currentMillis;
     
     if (isManualMode) {
       // Manual mode - handle manual control
       handleManualButtons();
+      wasNotAuto = true; // Force re-sync when switching back to Auto
     } else if (sensorFault) {
       // SENSOR FAULT SAFETY: Stop all movement in Auto mode if sensor fails
       noInterrupts();
       stepper.stop();
       interrupts();
       updateDirectionLEDsFromVelocity(0);
+      wasNotAuto = true; // Force re-sync when fault clears
     } else {
       // Auto mode - PID control
       setStepperSpeedsForMode();
@@ -3974,13 +3969,23 @@ void loop() {
         output = 0;
       }
 
-      static long targetPosition = stepper.currentPosition();
+      static long targetPosition = 0;
+
+      // Synchronize target position when entering Auto mode or when in deadband
+      // This prevents "jumps" or hunting due to stale target values
+      if (wasNotAuto || inDeadband) {
+        noInterrupts();
+        targetPosition = stepper.currentPosition();
+        interrupts();
+        wasNotAuto = false;
+      }
 
       if (!inDeadband) {
         const float POSITION_SCALE = 0.8;
         long positionDelta = (long)(output * POSITION_SCALE);
         
-        int maxMoveSteps = autoModeSpeed / 50;
+        // Dynamic speed adjustment based on error
+        int maxMoveSteps = autoModeSpeed / 50; // Max steps in 20ms
         
         if (abs(error) > LARGE_ERROR_THRESHOLD) {
           maxMoveSteps = (autoModeSpeed * FAST_SPEED_MULTIPLIER) / 50;
