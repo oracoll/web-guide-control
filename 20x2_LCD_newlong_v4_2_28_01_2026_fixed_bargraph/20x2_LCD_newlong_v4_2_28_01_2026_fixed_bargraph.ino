@@ -59,10 +59,13 @@ enum LcdUpdateState {
   LCD_WRITING_CHAR,
   LCD_WAITING,
   LCD_CLEARING,
-  LCD_SETTING_CURSOR
+  LCD_SETTING_CURSOR,
+  LCD_CREATING_CHAR
 };
 
 LcdUpdateState lcdState = LCD_IDLE;
+uint8_t pendingCharUpdates = 0; // Bitmask for slots 0-7
+uint8_t customBitmaps[8][8];
 unsigned long lcdStateTimer = 0;
 const unsigned long LCD_CHAR_DELAY = 40;  // 40us between characters
 int lcdCurrentRow = 0;
@@ -601,12 +604,15 @@ const uint8_t fillPatternsLTR[5] = {
   0b11110  // 4 pixels
 };
 
-// Character slot assignments
-#define CHAR_VOLT_PARTIAL 1
-#define CHAR_POS_PARTIAL  2
-#define CHAR_FULL_BLOCK   3
-#define CHAR_CENTER_LEFT  4
-#define CHAR_CENTER_RIGHT 5
+// Character slot assignments (Using 1-7 to avoid null-terminator issues in strings)
+#define CHAR_VOLT_PARTIAL_A 1
+#define CHAR_VOLT_PARTIAL_B 2
+#define CHAR_POS_PARTIAL_A  3
+#define CHAR_POS_PARTIAL_B  4
+#define CHAR_FULL_BLOCK     5
+#define CHAR_CENTER_LEFT    6
+#define CHAR_CENTER_RIGHT   7
+// Slot 0 is unused
 
 // Static bitmaps
 const uint8_t bitmapFullBlock[8]   = {0b11111,0b11111,0b11111,0b11111,0b11111,0b11111,0b11111,0b11111};
@@ -645,9 +651,29 @@ void stepperTimerISR() {
 
 // Non-blocking LCD State Machine
 void updateLcdNonBlocking() {
-  if (!lcdNeedsUpdate && !lcdUpdateInProgress) return;
-  
   unsigned long now = micros();
+
+  // Handle character creation with priority when idle
+  if (pendingCharUpdates != 0 && (lcdState == LCD_IDLE || lcdState == LCD_CREATING_CHAR)) {
+    if (lcdState == LCD_IDLE) {
+      lcdState = LCD_CREATING_CHAR;
+      lcdStateTimer = now;
+    }
+
+    if (now - lcdStateTimer >= 1000) { // 1ms delay between character creations
+      for (int i = 0; i < 8; i++) {
+        if (pendingCharUpdates & (1 << i)) {
+          lcd.createChar(i, customBitmaps[i]);
+          pendingCharUpdates &= ~(1 << i);
+          lcdStateTimer = now;
+          return; // Do only one per call
+        }
+      }
+      lcdState = LCD_IDLE;
+    }
+  }
+
+  if (!lcdNeedsUpdate && !lcdUpdateInProgress && pendingCharUpdates == 0) return;
   
   switch(lcdState) {
     case LCD_IDLE:
@@ -712,16 +738,16 @@ void updateLcdNonBlocking() {
 
 // Set LCD content (buffered, non-blocking)
 void setLcdContent(const char* line0, const char* line1) {
-  // Safe copy with space padding to support character code 0 and prevent reading past short strings
-  const char* p0 = line0;
-  const char* p1 = line1;
+  // Safe copy with space padding. Handles character code 0 correctly by checking string terminators.
+  bool line0Done = false;
+  bool line1Done = false;
 
   for (int i = 0; i < 20; i++) {
-    if (p0 && *p0 != '\0') lcdNewLine0[i] = *p0++;
-    else lcdNewLine0[i] = ' ';
+    if (!line0Done && line0[i] == '\0') line0Done = true;
+    if (!line1Done && line1[i] == '\0') line1Done = true;
 
-    if (p1 && *p1 != '\0') lcdNewLine1[i] = *p1++;
-    else lcdNewLine1[i] = ' ';
+    lcdNewLine0[i] = line0Done ? ' ' : line0[i];
+    lcdNewLine1[i] = line1Done ? ' ' : line1[i];
   }
 
   lcdNewLine0[20] = '\0';
@@ -832,6 +858,10 @@ void quickUpdateDisplayBuffered() {
 // ====================================================================
 
 void buildVoltageBarGraph(char* buffer) {
+    static int currentVoltSlot = CHAR_VOLT_PARTIAL_A;
+    static int lastTipCol = -1;
+    static bool lastLeftOfCenter = true;
+
     memset(buffer, ' ', 20);
     buffer[20] = '\0';
 
@@ -845,74 +875,101 @@ void buildVoltageBarGraph(char* buffer) {
         return;
     }
 
-    // Calculate total pixels from center (Max 48 pixels growth per side)
     float distanceFromCenter = fabs(displayInput - VOLTAGE_CENTER);
     float halfRange = (VOLTAGE_MAX - VOLTAGE_MIN) / 2.0;
     int totalPixels = (int)map(distanceFromCenter * 1000, 0, halfRange * 1000, 0, 48);
     totalPixels = constrain(totalPixels, 0, 48);
 
-    bool isLeftOfCenter_disp = lastVoltageGraphDirectionLeft;
+    bool isLeft = lastVoltageGraphDirectionLeft;
+    int tipCol = isLeft ? 9 : 10;
+    int tipPixels = 0;
 
-    if (isLeftOfCenter_disp) {
-        // FILL LEFT: Chars 9 down to 0
+    // Identify tip column and pixels
+    if (isLeft) {
         int growPixels = totalPixels;
-        
-        // Char 9 (Base 2 pixels)
         int c9 = growPixels > 3 ? 3 : growPixels;
-        if (c9 == 0) buffer[9] = CHAR_CENTER_LEFT;
-        else if (c9 == 3) buffer[9] = CHAR_FULL_BLOCK;
-        else {
-            updateDynamicChar(CHAR_VOLT_PARTIAL, 2 + c9, false);
-            buffer[9] = CHAR_VOLT_PARTIAL;
-        }
-        
-        growPixels -= c9;
-        for (int c = 8; c >= 0; c--) {
-            if (growPixels <= 0) break;
-            if (growPixels >= 5) {
-                buffer[c] = CHAR_FULL_BLOCK;
+        if (c9 < 3) {
+            tipCol = 9;
+            tipPixels = 2 + c9;
+        } else {
+            growPixels -= 3;
+            tipCol = 8;
+            for (int c = 8; c >= 0; c--) {
+                if (growPixels < 5) {
+                    tipCol = c;
+                    tipPixels = growPixels;
+                    break;
+                }
                 growPixels -= 5;
-            } else {
-                updateDynamicChar(CHAR_VOLT_PARTIAL, growPixels, false);
-                buffer[c] = CHAR_VOLT_PARTIAL;
-                growPixels = 0;
             }
         }
-        buffer[10] = CHAR_CENTER_RIGHT;
     } else {
-        // FILL RIGHT: Chars 10 up to 19
         int growPixels = totalPixels;
-        
-        // Char 10 (Base 2 pixels)
         int c10 = growPixels > 3 ? 3 : growPixels;
-        if (c10 == 0) buffer[10] = CHAR_CENTER_RIGHT;
-        else if (c10 == 3) buffer[10] = CHAR_FULL_BLOCK;
-        else {
-            updateDynamicChar(CHAR_VOLT_PARTIAL, 2 + c10, true);
-            buffer[10] = CHAR_VOLT_PARTIAL;
-        }
-        
-        growPixels -= c10;
-        for (int c = 11; c < 20; c++) {
-            if (growPixels <= 0) break;
-            if (growPixels >= 5) {
-                buffer[c] = CHAR_FULL_BLOCK;
+        if (c10 < 3) {
+            tipCol = 10;
+            tipPixels = 2 + c10;
+        } else {
+            growPixels -= 3;
+            tipCol = 11;
+            for (int c = 11; c < 20; c++) {
+                if (growPixels < 5) {
+                    tipCol = c;
+                    tipPixels = growPixels;
+                    break;
+                }
                 growPixels -= 5;
-            } else {
-                updateDynamicChar(CHAR_VOLT_PARTIAL, growPixels, true);
-                buffer[c] = CHAR_VOLT_PARTIAL;
-                growPixels = 0;
             }
         }
+    }
+
+    // Ping-Pong Slot Management
+    if (tipCol != lastTipCol || isLeft != lastLeftOfCenter) {
+        int oldSlot = currentVoltSlot;
+        currentVoltSlot = (currentVoltSlot == CHAR_VOLT_PARTIAL_A) ? CHAR_VOLT_PARTIAL_B : CHAR_VOLT_PARTIAL_A;
+        
+        // Smooth transition: Set old slot to its final look (FULL or center/empty)
+        if (isLeft == lastLeftOfCenter) {
+            if (isLeft) {
+                if (tipCol < lastTipCol) setSlotToFull(oldSlot); else setSlotToEmpty(oldSlot);
+            } else {
+                if (tipCol > lastTipCol) setSlotToFull(oldSlot); else setSlotToEmpty(oldSlot);
+            }
+        } else {
+            if (lastTipCol == 9) setSlotToCenterMarker(oldSlot, true);
+            else if (lastTipCol == 10) setSlotToCenterMarker(oldSlot, false);
+            else setSlotToEmpty(oldSlot);
+        }
+
+        lastTipCol = tipCol;
+        lastLeftOfCenter = isLeft;
+    }
+
+    // Fill buffer
+    if (isLeft) {
+        buffer[10] = CHAR_CENTER_RIGHT;
+        for (int c = 9; c > tipCol; c--) buffer[c] = CHAR_FULL_BLOCK;
+        if (tipPixels == 0) buffer[tipCol] = CHAR_CENTER_LEFT;
+        else {
+            updateDynamicChar(currentVoltSlot, tipPixels, false);
+            buffer[tipCol] = currentVoltSlot;
+        }
+    } else {
         buffer[9] = CHAR_CENTER_LEFT;
+        for (int c = 10; c < tipCol; c++) buffer[c] = CHAR_FULL_BLOCK;
+        if (tipPixels == 0) buffer[tipCol] = CHAR_CENTER_RIGHT;
+        else {
+            updateDynamicChar(currentVoltSlot, tipPixels, true);
+            buffer[tipCol] = currentVoltSlot;
+        }
     }
 }
 
-// ====================================================================
-// MODIFIED buildPositionGraph() - WITH 2-PIXEL CENTER LINES
-// ====================================================================
-
 void buildPositionGraph(char* buffer) {
+    static int currentPosSlot = CHAR_POS_PARTIAL_A;
+    static int lastTipCol = -1;
+    static bool lastLeftOfCenter = true;
+
     memset(buffer, ' ', 20);
     buffer[20] = '\0';
     
@@ -935,71 +992,94 @@ void buildPositionGraph(char* buffer) {
     }
     
     long centerPos = fullTravelSteps / 2;
-    if (centerPos <= 0) {
-        const char* msg = "Center:0";
-        for (int i = 0; i < 20 && msg[i]; i++) buffer[i] = msg[i];
-        return;
-    }
+    if (centerPos <= 0) return;
 
-    // Calculate total pixels from center (Max 48 pixels growth per side)
     long distanceFromCenter = abs(currentPosition - centerPos);
     int totalPixels = (int)map(distanceFromCenter, 0, centerPos, 0, 48);
     totalPixels = constrain(totalPixels, 0, 48);
 
-    bool isLeftOfCenter = currentPosition < centerPos;
+    bool isLeft = currentPosition < centerPos;
+    int tipCol = isLeft ? 9 : 10;
+    int tipPixels = 0;
 
-    if (isLeftOfCenter) {
-        // FILL LEFT: Chars 9 down to 0
+    // Identify tip column and pixels
+    if (isLeft) {
         int growPixels = totalPixels;
-        
-        // Char 9 (Base 2 pixels)
         int c9 = growPixels > 3 ? 3 : growPixels;
-        if (c9 == 0) buffer[9] = CHAR_CENTER_LEFT;
-        else if (c9 == 3) buffer[9] = CHAR_FULL_BLOCK;
-        else {
-            updateDynamicChar(CHAR_POS_PARTIAL, 2 + c9, false);
-            buffer[9] = CHAR_POS_PARTIAL;
-        }
-        
-        growPixels -= c9;
-        for (int c = 8; c >= 0; c--) {
-            if (growPixels <= 0) break;
-            if (growPixels >= 5) {
-                buffer[c] = CHAR_FULL_BLOCK;
+        if (c9 < 3) {
+            tipCol = 9;
+            tipPixels = 2 + c9;
+        } else {
+            growPixels -= 3;
+            tipCol = 8;
+            for (int c = 8; c >= 0; c--) {
+                if (growPixels < 5) {
+                    tipCol = c;
+                    tipPixels = growPixels;
+                    break;
+                }
                 growPixels -= 5;
-            } else {
-                updateDynamicChar(CHAR_POS_PARTIAL, growPixels, false);
-                buffer[c] = CHAR_POS_PARTIAL;
-                growPixels = 0;
             }
         }
-        buffer[10] = CHAR_CENTER_RIGHT;
     } else {
-        // FILL RIGHT: Chars 10 up to 19
         int growPixels = totalPixels;
-        
-        // Char 10 (Base 2 pixels)
         int c10 = growPixels > 3 ? 3 : growPixels;
-        if (c10 == 0) buffer[10] = CHAR_CENTER_RIGHT;
-        else if (c10 == 3) buffer[10] = CHAR_FULL_BLOCK;
-        else {
-            updateDynamicChar(CHAR_POS_PARTIAL, 2 + c10, true);
-            buffer[10] = CHAR_POS_PARTIAL;
-        }
-        
-        growPixels -= c10;
-        for (int c = 11; c < 20; c++) {
-            if (growPixels <= 0) break;
-            if (growPixels >= 5) {
-                buffer[c] = CHAR_FULL_BLOCK;
+        if (c10 < 3) {
+            tipCol = 10;
+            tipPixels = 2 + c10;
+        } else {
+            growPixels -= 3;
+            tipCol = 11;
+            for (int c = 11; c < 20; c++) {
+                if (growPixels < 5) {
+                    tipCol = c;
+                    tipPixels = growPixels;
+                    break;
+                }
                 growPixels -= 5;
-            } else {
-                updateDynamicChar(CHAR_POS_PARTIAL, growPixels, true);
-                buffer[c] = CHAR_POS_PARTIAL;
-                growPixels = 0;
             }
         }
+    }
+
+    // Ping-Pong Slot Management
+    if (tipCol != lastTipCol || isLeft != lastLeftOfCenter) {
+        int oldSlot = currentPosSlot;
+        currentPosSlot = (currentPosSlot == CHAR_POS_PARTIAL_A) ? CHAR_POS_PARTIAL_B : CHAR_POS_PARTIAL_A;
+        
+        // Smooth transition
+        if (isLeft == lastLeftOfCenter) {
+            if (isLeft) {
+                if (tipCol < lastTipCol) setSlotToFull(oldSlot); else setSlotToEmpty(oldSlot);
+            } else {
+                if (tipCol > lastTipCol) setSlotToFull(oldSlot); else setSlotToEmpty(oldSlot);
+            }
+        } else {
+            if (lastTipCol == 9) setSlotToCenterMarker(oldSlot, true);
+            else if (lastTipCol == 10) setSlotToCenterMarker(oldSlot, false);
+            else setSlotToEmpty(oldSlot);
+        }
+
+        lastTipCol = tipCol;
+        lastLeftOfCenter = isLeft;
+    }
+
+    // Fill buffer
+    if (isLeft) {
+        buffer[10] = CHAR_CENTER_RIGHT;
+        for (int c = 9; c > tipCol; c--) buffer[c] = CHAR_FULL_BLOCK;
+        if (tipPixels == 0) buffer[tipCol] = CHAR_CENTER_LEFT;
+        else {
+            updateDynamicChar(currentPosSlot, tipPixels, false);
+            buffer[tipCol] = currentPosSlot;
+        }
+    } else {
         buffer[9] = CHAR_CENTER_LEFT;
+        for (int c = 10; c < tipCol; c++) buffer[c] = CHAR_FULL_BLOCK;
+        if (tipPixels == 0) buffer[tipCol] = CHAR_CENTER_RIGHT;
+        else {
+            updateDynamicChar(currentPosSlot, tipPixels, true);
+            buffer[tipCol] = currentPosSlot;
+        }
     }
 }
 
@@ -3293,44 +3373,88 @@ void createBarGraphChars() {
   lcd.createChar(CHAR_CENTER_LEFT, (uint8_t*)bitmapCenterLeft);
   lcd.createChar(CHAR_CENTER_RIGHT, (uint8_t*)bitmapCenterRight);
 
-  // Initialize partial slots with empty
-  uint8_t empty[8] = {0};
-  lcd.createChar(CHAR_VOLT_PARTIAL, empty);
-  lcd.createChar(CHAR_POS_PARTIAL, empty);
+  // Initialize all slots to ensure consistent state
+  for (int i = 0; i < 8; i++) {
+    if (i == CHAR_FULL_BLOCK || i == CHAR_CENTER_LEFT || i == CHAR_CENTER_RIGHT) continue;
+    uint8_t empty[8] = {0};
+    lcd.createChar(i, empty);
+    for (int j = 0; j < 8; j++) customBitmaps[i][j] = 0;
+  }
 }
 
 /**
- * Updates a dynamic custom character slot only if the pattern changed
- * @param slot LCD custom character slot (1 or 2)
- * @param fillLevel 1-4 pixels
- * @param isLTR True for Left-to-Right fill, False for Right-to-Left
+ * Updates a dynamic custom character slot only if the pattern changed.
+ * This function queues the update for the non-blocking state machine.
  */
 void updateDynamicChar(int slot, int fillLevel, bool isLTR) {
-  static int lastVoltLevel = -1;
-  static bool lastVoltLTR = false;
-  static int lastPosLevel = -1;
-  static bool lastPosLTR = false;
+  uint8_t pattern = isLTR ? fillPatternsLTR[constrain(fillLevel, 0, 4)] : fillPatternsRTL[constrain(fillLevel, 0, 4)];
 
   bool changed = false;
-  if (slot == CHAR_VOLT_PARTIAL) {
-    if (fillLevel != lastVoltLevel || isLTR != lastVoltLTR) {
-      lastVoltLevel = fillLevel;
-      lastVoltLTR = isLTR;
+  for (int i = 0; i < 8; i++) {
+    if (customBitmaps[slot][i] != pattern) {
       changed = true;
-    }
-  } else if (slot == CHAR_POS_PARTIAL) {
-    if (fillLevel != lastPosLevel || isLTR != lastPosLTR) {
-      lastPosLevel = fillLevel;
-      lastPosLTR = isLTR;
-      changed = true;
+      break;
     }
   }
 
   if (changed) {
-    uint8_t bitmap[8];
-    uint8_t pattern = isLTR ? fillPatternsLTR[constrain(fillLevel, 0, 4)] : fillPatternsRTL[constrain(fillLevel, 0, 4)];
-    for (int i = 0; i < 8; i++) bitmap[i] = pattern;
-    lcd.createChar(slot, bitmap);
+    for (int i = 0; i < 8; i++) customBitmaps[slot][i] = pattern;
+    pendingCharUpdates |= (1 << slot);
+  }
+}
+
+/**
+ * Sets a custom character slot to look like a full block instantly.
+ */
+void setSlotToFull(int slot) {
+  bool changed = false;
+  for (int i = 0; i < 8; i++) {
+    if (customBitmaps[slot][i] != 0b11111) {
+      changed = true;
+      break;
+    }
+  }
+
+  if (changed) {
+    for (int i = 0; i < 8; i++) customBitmaps[slot][i] = 0b11111;
+    pendingCharUpdates |= (1 << slot);
+  }
+}
+
+/**
+ * Sets a custom character slot to look like a center marker instantly.
+ */
+void setSlotToCenterMarker(int slot, bool isLeft) {
+  const uint8_t* pattern = isLeft ? bitmapCenterLeft : bitmapCenterRight;
+  bool changed = false;
+  for (int i = 0; i < 8; i++) {
+    if (customBitmaps[slot][i] != pattern[i]) {
+      changed = true;
+      break;
+    }
+  }
+
+  if (changed) {
+    for (int i = 0; i < 8; i++) customBitmaps[slot][i] = pattern[i];
+    pendingCharUpdates |= (1 << slot);
+  }
+}
+
+/**
+ * Sets a custom character slot to empty (space) instantly.
+ */
+void setSlotToEmpty(int slot) {
+  bool changed = false;
+  for (int i = 0; i < 8; i++) {
+    if (customBitmaps[slot][i] != 0) {
+      changed = true;
+      break;
+    }
+  }
+
+  if (changed) {
+    for (int i = 0; i < 8; i++) customBitmaps[slot][i] = 0;
+    pendingCharUpdates |= (1 << slot);
   }
 }
 
