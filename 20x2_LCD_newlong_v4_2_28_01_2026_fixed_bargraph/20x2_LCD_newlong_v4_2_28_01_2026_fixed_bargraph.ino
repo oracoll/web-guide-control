@@ -112,6 +112,10 @@ const double DEADBAND_MIN = 0.0;       // Minimum deadband
 const double DEADBAND_MAX = 0.5;       // Maximum deadband
 double deadband = DEADBAND_DEFAULT;    // Current deadband
 
+// SENSOR FAULT PROTECTION SETTINGS (Adjustable by user)
+const double SENSOR_FAULT_MIN = 0.10;  // Lower fault limit (V) - Detects broken wire / Ground short
+const double SENSOR_FAULT_MAX = 5.80;  // Upper fault limit (V) - Detects VCC short
+
 // VOLTAGE DIVIDER SETTINGS (for sensor input)
 const double R1_DEFAULT = 1000.0;      // Voltage divider resistor 1 (Ω)
 double R1 = R1_DEFAULT;                // Current R1 value
@@ -379,6 +383,7 @@ void buildPositionGraph(char* buffer);
 void updateLcdNonBlocking();
 void setLcdContent(const char* line0, const char* line1);
 void quickUpdateDisplayBuffered();
+void clearAllDisplayBuffers();
 
 // Main system functions
 void handleMenuSystem();
@@ -1372,8 +1377,7 @@ void updateVoltageReading() {
 
       // SENSOR FAULT PROTECTION:
       // If sensor reading is at absolute extreme rails, it likely indicates a broken wire.
-      // Thresholds: < 0.1V (Ground short/cut) or > 5.8V (VCC short/cut)
-      if (Vin < 0.1 || Vin > 5.8) {
+      if (Vin < SENSOR_FAULT_MIN || Vin > SENSOR_FAULT_MAX) {
         if (sensorFaultCounter < 100) sensorFaultCounter++;
         if (sensorFaultCounter >= 50) sensorFault = true; // Sustained for ~250ms
       } else {
