@@ -1602,34 +1602,7 @@ void runHomingSequence() {
         // ============================================================
         // CRITICAL: CLEAR ALL DISPLAY BUFFERS BEFORE RETURNING
         // ============================================================
-        lcd.clear();
-        
-        // Reset ALL display buffers
-        memset(lcdLine0, ' ', 20);
-        memset(lcdLine1, ' ', 20);
-        memset(lcdNewLine0, ' ', 20);
-        memset(lcdNewLine1, ' ', 20);
-        lcdLine0[20] = '\0';
-        lcdLine1[20] = '\0';
-        lcdNewLine0[20] = '\0';
-        lcdNewLine1[20] = '\0';
-        
-        // Reset LCD state machine
-        lcdNeedsUpdate = false;
-        lcdUpdateInProgress = false;
-        lcdState = LCD_IDLE;
-        
-        // Force complete display refresh
-        lastDisplayedPosition = -1;
-        lastDisplayedSteps = -999999;
-        strcpy(lastVoltageStr, "");
-        lastFullDisplayRefresh = 0;
-        lastBargraphUpdate = 0;
-        lastPositionUpdate = 0;
-        
-        // Reset direction tracking
-        lastPosGraphDirectionLeft = true;
-        lastVoltageGraphDirectionLeft = true;
+        clearAllDisplayBuffers();
         
         // Mark as finished and return to idle
         homingState = HOMING_IDLE;
@@ -1883,22 +1856,7 @@ void runSmartCentering() {
                 // ============================================================
                 // CRITICAL: CLEAR DISPLAY COMPLETELY BEFORE TRANSITION
                 // ============================================================
-                lcd.clear();
-                
-                // Reset ALL display buffers
-                memset(lcdLine0, ' ', 20);
-                memset(lcdLine1, ' ', 20);
-                memset(lcdNewLine0, ' ', 20);
-                memset(lcdNewLine1, ' ', 20);
-                lcdLine0[20] = '\0';
-                lcdLine1[20] = '\0';
-                lcdNewLine0[20] = '\0';
-                lcdNewLine1[20] = '\0';
-                
-                // Reset LCD state machine
-                lcdNeedsUpdate = false;
-                lcdUpdateInProgress = false;
-                lcdState = LCD_IDLE;
+                clearAllDisplayBuffers();
                 
                 // Reset centering state
                 centeringActive = false;
@@ -1910,18 +1868,6 @@ void runSmartCentering() {
                 centeringShowingMessage = false;
                 
                 runStepperInInterrupt = true;
-                
-                // Force complete display refresh
-                lastDisplayedPosition = -1;
-                lastDisplayedSteps = -999999;
-                strcpy(lastVoltageStr, "");
-                lastFullDisplayRefresh = 0;
-                lastBargraphUpdate = 0;
-                lastPositionUpdate = 0;
-                
-                // Reset direction tracking
-                lastPosGraphDirectionLeft = true;
-                lastVoltageGraphDirectionLeft = true;
                 
                 // Immediately update display
                 quickUpdateDisplayBuffered();
@@ -2640,13 +2586,6 @@ void runCalibration() {
         delayWaiting = true;
         wdt_enable(WDTO_8S);
         displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
-        
-        // Reset display tracking to force immediate update
-        lastDisplayedPosition = -1;
-        strcpy(lastVoltageStr, "");
-        lastDisplayedSteps = -999999;
-        quickUpdateDisplayBuffered();
-        lastFullDisplayRefresh = currentMillis;
         break;
       }
      
@@ -2709,12 +2648,6 @@ void runCalibration() {
             wdt_enable(WDTO_8S);
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
             
-            // Reset display tracking
-            lastDisplayedPosition = -1;
-            strcpy(lastVoltageStr, "");
-            lastDisplayedSteps = -999999;
-            lastFullDisplayRefresh = 0;
-            
           } else {
             calibState = CALIB_IDLE;
             menuState = NORMAL;
@@ -2724,13 +2657,6 @@ void runCalibration() {
             delayWaiting = true;
             wdt_enable(WDTO_8S);
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
-            
-            // Reset display tracking to force immediate update
-            lastDisplayedPosition = -1;
-            strcpy(lastVoltageStr, "");
-            lastDisplayedSteps = -999999;
-            quickUpdateDisplayBuffered();
-            lastFullDisplayRefresh = currentMillis;
           }
         }
       }
@@ -2750,6 +2676,12 @@ void runCalibration() {
   // Handle timed messages for calib cancel/timeout
   if (delayWaiting && (menuState == NORMAL) && (millis() - delayTimer >= 1000)) {
     delayWaiting = false;
+
+    // ============================================================
+    // CRITICAL: CLEAR ALL DISPLAY BUFFERS BEFORE RETURNING
+    // ============================================================
+    clearAllDisplayBuffers();
+
     quickUpdateDisplayBuffered();
   }
 }
@@ -2790,20 +2722,14 @@ void handleSetButton() {
         // EXITING MENU - Save settings before exiting
         saveSettings(); // SAVE SETTINGS TO EEPROM
         menuState = NORMAL;
-        lcd.clear();
         
-        // Reset display tracking to force immediate update
-        lastDisplayedPosition = -1;
-        strcpy(lastVoltageStr, "");
-        lastDisplayedSteps = -999999;
+        // ============================================================
+        // CRITICAL: CLEAR ALL DISPLAY BUFFERS BEFORE RETURNING
+        // ============================================================
+        clearAllDisplayBuffers();
         
         // Update display immediately without waiting for interval
         quickUpdateDisplayBuffered();
-        
-        // Reset timing variables for immediate response
-        lastFullDisplayRefresh = now;
-        lastBargraphUpdate = now;
-        lastPositionUpdate = now;
         
         displayLockoutUntil = millis() + DISPLAY_LOCKOUT_MS;
       }
@@ -2902,12 +2828,11 @@ void handleSetButton() {
         if (currentHomingSubMenuItem == 0) {
           homeToLeft = true;
           menuState = NORMAL;
-          lcd.clear();
           
-          // Reset display tracking to force immediate update
-          lastDisplayedPosition = -1;
-          strcpy(lastVoltageStr, "");
-          lastDisplayedSteps = -999999;
+          // ============================================================
+          // CRITICAL: CLEAR ALL DISPLAY BUFFERS BEFORE RETURNING
+          // ============================================================
+          clearAllDisplayBuffers();
           
           homingState = HOMING_INIT;
           homingDone = false;
@@ -2915,19 +2840,17 @@ void handleSetButton() {
           
           // Update display immediately
           quickUpdateDisplayBuffered();
-          lastFullDisplayRefresh = now;
           
           displayLockoutUntil = millis() + DISPLAY_LOCKOUT_MS;
         }
         else if (currentHomingSubMenuItem == 1) {
           homeToLeft = false;
           menuState = NORMAL;
-          lcd.clear();
           
-          // Reset display tracking to force immediate update
-          lastDisplayedPosition = -1;
-          strcpy(lastVoltageStr, "");
-          lastDisplayedSteps = -999999;
+          // ============================================================
+          // CRITICAL: CLEAR ALL DISPLAY BUFFERS BEFORE RETURNING
+          // ============================================================
+          clearAllDisplayBuffers();
           
           homingState = HOMING_INIT;
           homingDone = false;
@@ -2935,7 +2858,6 @@ void handleSetButton() {
           
           // Update display immediately
           quickUpdateDisplayBuffered();
-          lastFullDisplayRefresh = now;
           
           displayLockoutUntil = millis() + DISPLAY_LOCKOUT_MS;
         }
@@ -2951,18 +2873,14 @@ void handleSetButton() {
         if (currentCalibMenuItem == 0) {
           saveSettings(); // SAVE ALL SETTINGS TO EEPROM
           menuState = NORMAL;
-          lcd.clear();
           
-          // Reset display tracking to force immediate update
-          lastDisplayedPosition = -1;
-          strcpy(lastVoltageStr, "");
-          lastDisplayedSteps = -999999;
+          // ============================================================
+          // CRITICAL: CLEAR ALL DISPLAY BUFFERS BEFORE RETURNING
+          // ============================================================
+          clearAllDisplayBuffers();
           
           // Update display immediately
           quickUpdateDisplayBuffered();
-          lastFullDisplayRefresh = now;
-          lastBargraphUpdate = now;
-          lastPositionUpdate = now;
           
           displayLockoutUntil = millis() + DISPLAY_LOCKOUT_MS;
         } else {
@@ -3825,34 +3743,7 @@ void runSmartStartup() {
         // ============================================================
         // CRITICAL: CLEAR DISPLAY COMPLETELY BEFORE TRANSITION
         // ============================================================
-        lcd.clear();
-        
-        // Reset ALL display buffers
-        memset(lcdLine0, ' ', 20);
-        memset(lcdLine1, ' ', 20);
-        memset(lcdNewLine0, ' ', 20);
-        memset(lcdNewLine1, ' ', 20);
-        lcdLine0[20] = '\0';
-        lcdLine1[20] = '\0';
-        lcdNewLine0[20] = '\0';
-        lcdNewLine1[20] = '\0';
-        
-        // Reset LCD state machine
-        lcdNeedsUpdate = false;
-        lcdUpdateInProgress = false;
-        lcdState = LCD_IDLE;
-        
-        // Force complete display refresh
-        lastDisplayedPosition = -1;
-        lastDisplayedSteps = -999999;
-        strcpy(lastVoltageStr, "");
-        lastFullDisplayRefresh = 0;
-        lastBargraphUpdate = 0;
-        lastPositionUpdate = 0;
-        
-        // Reset direction tracking for bargraphs
-        lastPosGraphDirectionLeft = true;
-        lastVoltageGraphDirectionLeft = true;
+        clearAllDisplayBuffers();
         
         // Mark startup complete
         startupState = STARTUP_COMPLETE;
