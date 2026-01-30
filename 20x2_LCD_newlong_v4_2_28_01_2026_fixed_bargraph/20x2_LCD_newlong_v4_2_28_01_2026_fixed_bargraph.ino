@@ -386,6 +386,7 @@ void buildVoltageBarGraph(char* buffer);
 void buildPositionGraph(char* buffer);
 void updateLcdNonBlocking();
 void setLcdContent(const char* line0, const char* line1);
+void setLcdContent_P(const char* line0, const char* line1);
 void quickUpdateDisplayBuffered();
 void clearAllDisplayBuffers();
 
@@ -631,10 +632,9 @@ void stepperTimerISR() {
   
   // Run stepper motor in interrupt context
   // This ensures stepper pulses happen at exact intervals
-  if (runStepperInInterrupt && menuState == NORMAL && !centeringActive) {
+  if (runStepperInInterrupt) {
     // INSTANT LIMIT PROTECTION:
     // Check limit switches at 20kHz for sub-millisecond response.
-    // digitalRead is fast enough for 50us interval on Mega2560.
     bool leftLimit = (digitalRead(LEFT_LIMIT_PIN) == (LIMIT_ACTIVE_HIGH ? HIGH : LOW));
     bool rightLimit = (digitalRead(RIGHT_LIMIT_PIN) == (LIMIT_ACTIVE_HIGH ? HIGH : LOW));
 
@@ -745,8 +745,8 @@ void updateLcdNonBlocking() {
 // Set LCD content (buffered, non-blocking)
 void setLcdContent(const char* line0, const char* line1) {
   // Safe copy with space padding. Handles character code 0 correctly by checking string terminators.
-  bool line0Done = false;
-  bool line1Done = false;
+  bool line0Done = !line0;
+  bool line1Done = !line1;
 
   for (int i = 0; i < 20; i++) {
     if (!line0Done && line0[i] == '\0') line0Done = true;
@@ -761,6 +761,14 @@ void setLcdContent(const char* line0, const char* line1) {
   
   // Mark as needing update
   lcdNeedsUpdate = true;
+}
+
+void setLcdContent_P(const char* line0, const char* line1) {
+  char buf0[21];
+  char buf1[21];
+  if (line0) strcpy_P(buf0, line0);
+  if (line1) strcpy_P(buf1, line1);
+  setLcdContent(line0 ? buf0 : NULL, line1 ? buf1 : NULL);
 }
 
 // ====================================================================
@@ -1142,16 +1150,8 @@ void clearAllDisplayBuffers() {
  * @param duration How long to display message (ms)
  */
 void showMessageTimed(const char* line1, const char* line2, unsigned long duration) {
-  // Use direct LCD for messages (they're infrequent)
   clearAllDisplayBuffers();
-  if (line1) {
-    lcd.setCursor(0, 0);
-    lcdPrint_P(line1);
-  }
-  if (line2) {
-    lcd.setCursor(0, 1);
-    lcdPrint_P(line2);
-  }
+  setLcdContent_P(line1, line2);
   messageDisplayStartTime = millis();
   messageDisplayActive = true;
   displayLockoutUntil = millis() + duration;
@@ -1209,7 +1209,9 @@ bool isValidInt(long val, long minVal, long maxVal) {
  */
 bool isSafeToMove(long targetPos) {
   // Get current position
+  noInterrupts();
   long currentPos = stepper.currentPosition();
+  interrupts();
   
   // Update limit switch states
   leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
@@ -1494,8 +1496,8 @@ void updateVoltageReading() {
  * Non-blocking state machine implementation
  */
 void runHomingSequence() {
-  // CRITICAL: Disable interrupt control while homing to prevent clashes
-  runStepperInInterrupt = false;
+  // Use interrupt control for smooth movement
+  runStepperInInterrupt = true;
 
   static unsigned long messageTimer = 0;
   wdt_reset();
@@ -1524,8 +1526,7 @@ void runHomingSequence() {
       
     case HOMING_LEFT:
       if (timeout) {
-        lcd.setCursor(0, 1);
-        lcdPrint_P(STR_TIMEOUT);
+        setLcdContent_P(STR_HOMING, STR_TIMEOUT);
         messageTimer = millis();
         homingState = HOMING_COMPLETE;
         break;
@@ -1534,54 +1535,33 @@ void runHomingSequence() {
       leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
       
       if (leftLimitState) {
-        // Found left limit!
         noInterrupts();
         stepper.stop();
         stepper.setCurrentPosition(0);
         interrupts();
         currentPosition = 0;
-        lastDisplayedPosition = 0;
-        lastDisplayedSteps = 0;
-        
-        // Turn off all LEDs
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
         digitalWrite(CENTER_LED_PIN, LOW);
         digitalWrite(SET_LED_PIN, LOW);
-        
-        // Display message
-        lcd.setCursor(0, 1);
-        lcdPrint_P(STR_LEFT_LIMIT);
-        lcd.print(F(" "));
-        
-        // Start timer for non-blocking wait
+        setLcdContent_P(STR_HOMING, STR_LEFT_LIMIT);
         messageTimer = millis();
         homingState = HOMING_LEFT_WAIT;
       } else {
-        // Still moving to left
+        setLcdContent_P(STR_HOMING, PSTR("Moving to left limit"));
         digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
         digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
         digitalWrite(CENTER_LED_PIN, LOW);
-        noInterrupts();
-        stepper.runSpeed();
-        interrupts();
       }
       break;
       
     // Wait after finding left limit
     case HOMING_LEFT_WAIT:
       wdt_reset();
-      
-      // Non-blocking wait for 200ms
       if (millis() - messageTimer >= 200) {
-        // Wait complete, now decide next action
         if (fullTravelSteps > 0) {
-          // We have calibration data, move to center
           long centerPos = fullTravelSteps / 2;
-          clearAllDisplayBuffers();
-          lcd.setCursor(0, 0);
-          lcdPrint_P(STR_CENTERING);
-          
+          setLcdContent_P(STR_CENTERING, NULL);
           noInterrupts();
           stepper.setMaxSpeed(homingSpeed);
           stepper.setAcceleration(stepperAcceleration);
@@ -1589,7 +1569,6 @@ void runHomingSequence() {
           interrupts();
           homingState = HOMING_CENTER;
         } else {
-          // No calibration, just finish
           homingState = HOMING_COMPLETE;
         }
       }
@@ -1597,64 +1576,40 @@ void runHomingSequence() {
       
     case HOMING_RIGHT:
       if (timeout) {
-        lcd.setCursor(0, 1);
-        lcdPrint_P(STR_TIMEOUT);
+        setLcdContent_P(STR_HOMING, STR_TIMEOUT);
         messageTimer = millis();
         homingState = HOMING_COMPLETE;
         break;
       }
-      
       rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
-      
       if (rightLimitState) {
-        // Found right limit!
         noInterrupts();
         stepper.stop();
         stepper.setCurrentPosition(fullTravelSteps);
         interrupts();
         currentPosition = fullTravelSteps;
-        lastDisplayedPosition = fullTravelSteps;
-        lastDisplayedSteps = fullTravelSteps;
-        
-        // Turn off all LEDs
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
         digitalWrite(CENTER_LED_PIN, LOW);
         digitalWrite(SET_LED_PIN, LOW);
-        
-        // Display message
-        lcd.setCursor(0, 1);
-        lcdPrint_P(STR_RIGHT_LIMIT);
-        lcd.print(F(" "));
-        
-        // Start timer for non-blocking wait
+        setLcdContent_P(STR_HOMING, STR_RIGHT_LIMIT);
         messageTimer = millis();
         homingState = HOMING_RIGHT_WAIT;
       } else {
-        // Still moving to right
+        setLcdContent_P(STR_HOMING, PSTR("Moving to right limit"));
         digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
         digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
         digitalWrite(CENTER_LED_PIN, LOW);
-        noInterrupts();
-        stepper.runSpeed();
-        interrupts();
       }
       break;
       
     // Wait after finding right limit
     case HOMING_RIGHT_WAIT:
       wdt_reset();
-      
-      // Non-blocking wait for 200ms
       if (millis() - messageTimer >= 200) {
-        // Wait complete, now decide next action
         if (fullTravelSteps > 0) {
-          // We have calibration data, move to center
           long centerPos = fullTravelSteps / 2;
-          clearAllDisplayBuffers();
-          lcd.setCursor(0, 0);
-          lcdPrint_P(STR_CENTERING);
-          
+          setLcdContent_P(STR_CENTERING, NULL);
           noInterrupts();
           stepper.setMaxSpeed(homingSpeed);
           stepper.setAcceleration(stepperAcceleration);
@@ -1662,7 +1617,6 @@ void runHomingSequence() {
           interrupts();
           homingState = HOMING_CENTER;
         } else {
-          // No calibration, just finish
           homingState = HOMING_COMPLETE;
         }
       }
@@ -1670,57 +1624,43 @@ void runHomingSequence() {
       
     case HOMING_CENTER:
       if (timeout) {
-        lcd.setCursor(0, 1);
-        lcdPrint_P(STR_TIMEOUT);
+        setLcdContent_P(STR_CENTERING, STR_TIMEOUT);
         messageTimer = millis();
         homingState = HOMING_COMPLETE;
         break;
       }
-      
       noInterrupts();
-      stepper.run();
       long distCenter = stepper.distanceToGo();
+      currentPosition = stepper.currentPosition();
       interrupts();
       
       if (distCenter == 0) {
-        // Reached center position
-        currentPosition = stepper.currentPosition();
-        lastDisplayedPosition = currentPosition;
-        lastDisplayedSteps = currentPosition;
-        
-        // Turn off direction LEDs, turn on center LED
         digitalWrite(LEFT_LED_PIN, LOW);
         digitalWrite(RIGHT_LED_PIN, LOW);
         digitalWrite(CENTER_LED_PIN, HIGH);
-        
-        // Display center position
-        lcd.setCursor(0, 1);
-        char buffer[21];
-        snprintf(buffer, sizeof(buffer), "Center: %ld", currentPosition);
-        buffer[20] = '\0';
-        lcd.print(buffer);
-        
-        // Start timer for message display
+        char buf[21];
+        snprintf(buf, 21, "Center: %ld", currentPosition);
+        setLcdContent_P(STR_CENTERING, NULL); // Keep top line, setLcdContent logic needs to handle buf
+        setLcdContent(NULL, buf); // This is tricky with my current setLcdContent. I'll just use a single setLcdContent call.
+        char topBuf[21];
+        strcpy_P(topBuf, STR_CENTERING);
+        setLcdContent(topBuf, buf);
         messageTimer = millis();
         homingState = HOMING_COMPLETE_WAIT;
+      } else {
+        char buf[21];
+        snprintf(buf, 21, "Pos: %ld", currentPosition);
+        char topBuf[21];
+        strcpy_P(topBuf, STR_CENTERING);
+        setLcdContent(topBuf, buf);
       }
       break;
       
-    // Wait before showing completion message
     case HOMING_COMPLETE_WAIT:
       wdt_reset();
-      
-      // Non-blocking wait for 500ms
       if (millis() - messageTimer >= 500) {
-        // Mark homing as complete
         homingDone = true;
-        
-        // Show completion message
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("Homing Complete"));
-        
-        // Start timer for final message
+        setLcdContent("Homing Complete", "");
         messageTimer = millis();
         homingState = HOMING_COMPLETE_FINAL;
       }
@@ -1841,179 +1781,101 @@ void startSmartCentering() {
 */
 void runSmartCentering() {
     if (!centeringActive) return;
-    
-    // Update sensors and limits EVERY TIME
+    runStepperInInterrupt = true;
+
     leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
     rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
     updateCenterSensor();
     
-    // Timeout check
     if (millis() - centeringStartTime > 10000) {
+        noInterrupts();
         stepper.stop();
+        interrupts();
         centeringActive = false;
         centeringState = CENTERING_IDLE;
         setLcdContent("Center Timeout!", "");
-        runStepperInInterrupt = true;
         return;
     }
     
+    noInterrupts();
     stepper.setAcceleration(5000);
-    
+    long distToGo = stepper.distanceToGo();
+    currentPosition = stepper.currentPosition();
+    interrupts();
+
     switch (centeringState) {
         case CENTERING_MOVE_TO_CENTER: {
-            noInterrupts();
-            stepper.setMaxSpeed(centerMoveSpeed);
-            stepper.run();
-            interrupts();
-            
-            bool sensorTransition = false;
-            if (approachingFromLeft) {
-                sensorTransition = (currentCenterSensorState == LOW);
-            } else {
-                sensorTransition = (currentCenterSensorState == HIGH);
-            }
-            
-            if (sensorTransition || stepper.distanceToGo() == 0) {
+            bool sensorTransition = approachingFromLeft ? (currentCenterSensorState == LOW) : (currentCenterSensorState == HIGH);
+            if (sensorTransition || distToGo == 0) {
                 if (sensorTransition) {
-                    verifiedTransitionPos = stepper.currentPosition();
-                    
-                    lcd.setCursor(0, 1);
-                    lcd.print("Transition found!");
-                    
+                    verifiedTransitionPos = currentPosition;
+                    setLcdContent("Centering...", "Transition found!");
                     noInterrupts();
                     stepper.stop();
-                    interrupts();
-                    delayMicroseconds(100);
-                    
-                    long backTarget = verifiedTransitionPos;
-                    if (approachingFromLeft) {
-                        backTarget -= 10;
-                    } else {
-                        backTarget += 10;
-                    }
+                    long backTarget = verifiedTransitionPos + (approachingFromLeft ? -10 : 10);
                     backTarget = constrain(backTarget, 0, fullTravelSteps);
-                    
-                    noInterrupts();
                     stepper.setMaxSpeed(centerCoarseFineSpeed);
                     stepper.moveTo(backTarget);
                     interrupts();
                     centeringState = CENTERING_VERIFY_TRANSITION;
                 } else {
-                    if (approachingFromLeft) {
-                        noInterrupts();
-                        stepper.moveTo(fullTravelSteps);
-                        interrupts();
-                        lcd.setCursor(0, 1);
-                        lcd.print("Searching right...");
-                    } else {
-                        noInterrupts();
-                        stepper.moveTo(0);
-                        interrupts();
-                        lcd.setCursor(0, 1);
-                        lcd.print("Searching left...");
-                    }
+                    noInterrupts();
+                    stepper.moveTo(approachingFromLeft ? fullTravelSteps : 0);
+                    interrupts();
+                    setLcdContent("Centering...", approachingFromLeft ? "Searching right..." : "Searching left...");
                 }
+            } else {
+                char buf[21];
+                snprintf(buf, 21, "Pos: %ld", currentPosition);
+                setLcdContent("Centering...", buf);
             }
             break;
         }
         
         case CENTERING_VERIFY_TRANSITION: {
-            noInterrupts();
-            stepper.run();
-            long dist = stepper.distanceToGo();
-            interrupts();
-            
-            if (dist == 0) {
-                long forwardTarget = verifiedTransitionPos;
-                if (approachingFromLeft) {
-                    forwardTarget += 20;
-                } else {
-                    forwardTarget -= 20;
-                }
+            if (distToGo == 0) {
+                long forwardTarget = verifiedTransitionPos + (approachingFromLeft ? 20 : -20);
                 forwardTarget = constrain(forwardTarget, 0, fullTravelSteps);
-                
                 noInterrupts();
                 stepper.setMaxSpeed(centerFineSpeed);
                 stepper.moveTo(forwardTarget);
                 interrupts();
                 centeringState = CENTERING_FINAL_STOP;
+                setLcdContent("Centering...", "Verifying...");
             }
             break;
         }
         
         case CENTERING_FINAL_STOP: {
-            noInterrupts();
-            stepper.run();
-            interrupts();
-            
-            bool finalTransition = false;
-            if (approachingFromLeft) {
-                finalTransition = (currentCenterSensorState == LOW);
-            } else {
-                finalTransition = (currentCenterSensorState == HIGH);
-            }
-            
-            noInterrupts();
-            long distFinal = stepper.distanceToGo();
-            interrupts();
-
-            if (finalTransition || distFinal == 0) {
-                if (finalTransition) {
-                    noInterrupts();
-                    verifiedTransitionPos = stepper.currentPosition();
-                    interrupts();
-                }
-                
+            bool finalTransition = approachingFromLeft ? (currentCenterSensorState == LOW) : (currentCenterSensorState == HIGH);
+            if (finalTransition || distToGo == 0) {
+                if (finalTransition) verifiedTransitionPos = currentPosition;
                 noInterrupts();
                 stepper.stop();
-                interrupts();
-                delayMicroseconds(100);
-                noInterrupts();
                 stepper.setMaxSpeed(centerMoveSpeed);
                 stepper.moveTo(verifiedTransitionPos);
                 interrupts();
                 returnedToCenter = true;
                 centeringState = CENTERING_COMPLETE;
+                setLcdContent("Centering...", "Final stop");
             }
             break;
         }
         
         case CENTERING_COMPLETE: {
-            noInterrupts();
-            stepper.run();
-            long distComplete = stepper.distanceToGo();
-            interrupts();
-            
-            if (distComplete == 0 && returnedToCenter && !centeringShowingMessage) {
+            if (distToGo == 0 && returnedToCenter && !centeringShowingMessage) {
                 myPID.SetMode(MANUAL);
                 output = 0.0;
-                
                 long centerPos = fullTravelSteps / 2;
-                
-                // ============================================================
-                // CRITICAL: UPDATE ALL POSITION TRACKING VARIABLES
-                // ============================================================
+                noInterrupts();
                 stepper.setCurrentPosition(centerPos);
+                interrupts();
                 currentPosition = centerPos;
-                lastDisplayedPosition = centerPos;
-                lastDisplayedSteps = centerPos;
-                // ============================================================
-                
-                if (!isManualMode) {
-                    myPID.SetMode(AUTOMATIC);
-                }
-                
-                // Show completion message
-                clearAllDisplayBuffers();
-                lcd.setCursor(0, 0);
-                lcd.print("Center OK!");
-                lcd.setCursor(0, 1);
-                lcd.print("Pos:");
-                lcd.print(currentPosition);
-                
+                if (!isManualMode) myPID.SetMode(AUTOMATIC);
+                char buf[21];
+                snprintf(buf, 21, "Pos: %ld", currentPosition);
+                setLcdContent("Center OK!", buf);
                 digitalWrite(CENTER_LED_PIN, HIGH);
-                
-                // Start non-blocking timer
                 centeringCompletionTimer = millis();
                 centeringShowingMessage = true;
             }
@@ -2163,77 +2025,40 @@ void drawMenu() {
   if (millis() - lastMenuUpdate < 50 && blinkState == lastBlinkState) return;
   lastMenuUpdate = millis();
   lastBlinkState = blinkState;
-  
-  bool forceRedraw = (lastMenuTopItem == -1) ||
-                     (lastCurrentMenuItem != currentMenuItem) ||
-                     (lastMenuTopItem != menuTopItem) ||
-                     (menuState == MENU_EDIT);  // Force redraw when in edit mode
-  
+
+  char lines[2][21];
   for (int i = 0; i < 2; i++) {
+    memset(lines[i], ' ', 20);
+    lines[i][20] = '\0';
+
     int idx = menuTopItem + i;
+    if (idx < 0 || idx >= numMenuItems) continue;
     
-    if (idx < 0 || idx >= numMenuItems) {
-      // Clear the entire line if no valid menu item
-      lcd.setCursor(0, i);
-      for (int j = 0; j < 20; j++) {
-        lcd.write(' ');
-      }
-      continue;
+    lines[i][0] = (idx == currentMenuItem ? '>' : ' ');
+    int nameLen = strlen(menuItems[idx]);
+    for (int j = 0; j < nameLen && (j + 1) < 20; j++) {
+      lines[i][j + 1] = menuItems[idx][j];
     }
     
-    long currentValue = getMenuValueInt(idx);
-    if (forceRedraw || lastMenuValues[idx] != currentValue || 
-        (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem)) {
-      
-      // Clear the entire line first
-      lcd.setCursor(0, i);
-      for (int j = 0; j < 20; j++) {
-        lcd.write(' ');
+    char valueStr[24];
+    if (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem) {
+      strncpy(valueStr, editValueStr, 23);
+      if (!blinkState && (isdigit(valueStr[currentDigitPos]) || valueStr[currentDigitPos] == '_')) {
+        valueStr[currentDigitPos] = ' ';
       }
-      
-      // Now draw the menu item
-      lcd.setCursor(0, i);
-      lcd.print(idx == currentMenuItem ? ">" : " ");
-      
-      // Print menu item name
-      lcd.print(menuItems[idx]);
-      
-      // Prepare value string
-      char valueStr[24];
-      memset(valueStr, 0, sizeof(valueStr));
-      
-      if (menuState == MENU_DIGIT_EDIT && idx == currentMenuItem) {
-        strncpy(valueStr, editValueStr, 23);
-        if (!blinkState && (isdigit(valueStr[currentDigitPos]) || valueStr[currentDigitPos] == '_')) {
-          valueStr[currentDigitPos] = ' ';
-        }
-      } else {
-        getMenuValueString(idx, valueStr);
+    } else {
+      getMenuValueString(idx, valueStr);
+    }
+
+    int valueLen = strlen(valueStr);
+    int startPos = 20 - valueLen;
+    if (startPos > nameLen + 1) {
+      for (int j = 0; j < valueLen; j++) {
+        lines[i][startPos + j] = valueStr[j];
       }
-      
-      // Right-align the value
-      int valueLen = strlen(valueStr);
-      if (valueLen <= 20) {
-        // Calculate starting position to right-align
-        int startPos = 20 - valueLen;
-        
-        // Clear any existing text in the value area
-        for (int j = startPos; j < 20; j++) {
-          lcd.setCursor(j, i);
-          lcd.write(' ');
-        }
-        
-        // Print the value
-        lcd.setCursor(startPos, i);
-        lcd.print(valueStr);
-      }
-      
-      lastMenuValues[idx] = currentValue;
     }
   }
-  
-  lastMenuTopItem = menuTopItem;
-  lastCurrentMenuItem = currentMenuItem;
+  setLcdContent(lines[0], lines[1]);
 }
 
 /**
@@ -2241,41 +2066,16 @@ void drawMenu() {
  */
 void drawCalibMenu() {
   wdt_reset();
-  static unsigned long lastUpdate = 0;
-  if (lastCalibMenuItem != currentCalibMenuItem || millis() - lastUpdate > 100) {
-    lastUpdate = millis();
-    
-    // Clear both lines
-    lcd.setCursor(0, 0);
-    for (int j = 0; j < 20; j++) lcd.write(' ');
-    lcd.setCursor(0, 1);
-    for (int j = 0; j < 20; j++) lcd.write(' ');
-    
-    lcd.setCursor(0, 0);
-    
-    if (calibState == CALIB_LEFT_CONFIRM) {
-      lcd.print(F("Left Limit Reached"));
-    } else if (calibState == CALIB_RIGHT_CONFIRM) {
-      char buffer[21];
-      snprintf(buffer, sizeof(buffer), "Calib Done: %ld", fullTravelSteps);
-      buffer[20] = '\0';
-      lcd.print(buffer);
-    } else if (menuState == MENU_EXIT_CONFIRM) {
-      lcd.print(F("Exit & Save?"));
-    }
-    
-    char lineBuffer[21];
-    memset(lineBuffer, 0, sizeof(lineBuffer));
-    snprintf(lineBuffer, sizeof(lineBuffer), "%c%-9s %c%s",
-            (currentCalibMenuItem == 0 ? '>' : ' '),
-            calibMenuItems[0],
-            (currentCalibMenuItem == 1 ? '>' : ' '),
-            calibMenuItems[1]);
-    lineBuffer[20] = '\0';
-    lcd.setCursor(0, 1);
-    lcd.print(lineBuffer);
-    lastCalibMenuItem = currentCalibMenuItem;
-  }
+  char line0[21] = "                    ";
+  if (calibState == CALIB_LEFT_CONFIRM) strcpy(line0, "Left Limit Reached");
+  else if (calibState == CALIB_RIGHT_CONFIRM) snprintf(line0, 21, "Calib Done: %ld", fullTravelSteps);
+  else if (menuState == MENU_EXIT_CONFIRM) strcpy(line0, "Exit & Save?");
+
+  char line1[21];
+  snprintf(line1, 21, "%c%-9s %c%s",
+          (currentCalibMenuItem == 0 ? '>' : ' '), calibMenuItems[0],
+          (currentCalibMenuItem == 1 ? '>' : ' '), calibMenuItems[1]);
+  setLcdContent(line0, line1);
 }
 
 /**
@@ -2606,26 +2406,24 @@ void runCalibration() {
     case CALIB_INIT:
       wdt_disable();
       clearAllDisplayBuffers();
-      lcd.setCursor(0, 0);
-      lcd.print(F("Calibration Mode"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("Finding Left Limit"));
+      setLcdContent("Calibration Mode", "Finding Left Limit");
       calibTimer = currentMillis;
+      noInterrupts();
       stepper.setSpeed(-calibSpeed);
+      interrupts();
       calibState = CALIB_MOVE_LEFT;
       delayWaiting = false;
+      runStepperInInterrupt = true;
       break;
       
     case CALIB_MOVE_LEFT:
       wdt_reset();
       if (!leftLimitState) {
+        setLcdContent("Calibration Mode", "Finding Left Limit");
         digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
         digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
         digitalWrite(CENTER_LED_PIN, LOW);
         digitalWrite(SET_LED_PIN, LOW);
-        noInterrupts();
-        stepper.runSpeed();
-        interrupts();
       } else {
         noInterrupts();
         stepper.stop();
@@ -2642,6 +2440,7 @@ void runCalibration() {
         delayTimer = currentMillis;
         delayWaiting = true;
         calibState = CALIB_LEFT_CONFIRM;
+        setLcdContent("Left Limit Reached", "Continue  Cancel");
       }
       break;
       
@@ -2661,14 +2460,11 @@ void runCalibration() {
       if (currentMillis - calibTimer >= CALIB_TIMEOUT_MS) {
         calibState = CALIB_IDLE;
         menuState = NORMAL;
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("Calib Timed Out"));
+        setLcdContent("Calib Timed Out", "");
         delayTimer = currentMillis;
         delayWaiting = true;
         wdt_enable(WDTO_8S);
         displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
-        runStepperInInterrupt = true;
         break;
       }
      
@@ -2684,25 +2480,23 @@ void runCalibration() {
         if (held >= AUTO_BUTTON_DEBOUNCE_MS && held < SET_BUTTON_LONG_PRESS_MS) {
           if (currentCalibMenuItem == 0) {
             calibTimer = currentMillis;
+            noInterrupts();
             stepper.setSpeed(calibSpeed);
+            interrupts();
             digitalWrite(LEFT_LED_PIN, INVERT_LED_LOGIC ? HIGH : LOW);
             digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
             digitalWrite(CENTER_LED_PIN, LOW);
             digitalWrite(SET_LED_PIN, LOW);
-            lcd.clear();
-            lcd.setCursor(0, 0);
-            lcd.print(F("Finding Right Limit"));
+            setLcdContent("Finding Right Limit", "");
             calibState = CALIB_MOVE_RIGHT;
           } else {
             calibState = CALIB_IDLE;
             menuState = NORMAL;
-            lcd.clear();
-            lcd.print(F("Calib Cancelled"));
+            setLcdContent("Calib Cancelled", "");
             delayTimer = currentMillis;
             delayWaiting = true;
             wdt_enable(WDTO_8S);
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
-            runStepperInInterrupt = true;
           }
         }
       }
@@ -2717,17 +2511,12 @@ void runCalibration() {
         digitalWrite(RIGHT_LED_PIN, INVERT_LED_LOGIC ? LOW : HIGH);
         digitalWrite(CENTER_LED_PIN, LOW);
         digitalWrite(SET_LED_PIN, LOW);
-        lcd.setCursor(0, 1);
         char buffer[21];
         noInterrupts();
         long cp = stepper.currentPosition();
         interrupts();
-        snprintf(buffer, sizeof(buffer), "Steps: %ld", cp);
-        buffer[20] = '\0';
-        lcd.print(buffer);
-        noInterrupts();
-        stepper.runSpeed();
-        interrupts();
+        snprintf(buffer, 21, "Steps: %ld", cp);
+        setLcdContent("Finding Right Limit", buffer);
       } else {
         noInterrupts();
         stepper.stop();
@@ -2743,6 +2532,9 @@ void runCalibration() {
         delayTimer = currentMillis;
         delayWaiting = true;
         calibState = CALIB_RIGHT_CONFIRM;
+        char buf[21];
+        snprintf(buf, 21, "Calib Done: %ld", fullTravelSteps);
+        setLcdContent(buf, "Continue  Cancel");
       }
       break;
       
@@ -2762,14 +2554,11 @@ void runCalibration() {
       if (currentMillis - calibTimer >= CALIB_TIMEOUT_MS) {
         calibState = CALIB_IDLE;
         menuState = NORMAL;
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("Calib Timed Out"));
+        setLcdContent("Calib Timed Out", "");
         delayTimer = currentMillis;
         delayWaiting = true;
         wdt_enable(WDTO_8S);
         displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
-        runStepperInInterrupt = true;
         break;
       }
      
@@ -2784,76 +2573,44 @@ void runCalibration() {
         unsigned long held = currentMillis - setButtonDownTime;
         if (held >= AUTO_BUTTON_DEBOUNCE_MS && held < SET_BUTTON_LONG_PRESS_MS) {
           if (currentCalibMenuItem == 0) {
-            saveSettings(); // Save calibration to EEPROM
-            
-            // CRITICAL FIX: Move away from the right limit switch before centering
-            clearAllDisplayBuffers();
-            lcd.setCursor(0, 0);
-            lcd.print(F("Releasing limit..."));
-            lcd.setCursor(0, 1);
-            lcd.print(F("Moving left..."));
-            
-            // Enable stepper
+            saveSettings();
+            setLcdContent("Releasing limit...", "Moving left...");
             noInterrupts();
             stepper.enableOutputs();
-            
-            // Move left 200 steps to release from limit switch
             stepper.setMaxSpeed(500);
             stepper.setAcceleration(stepperAcceleration);
             stepper.move(-200);
             interrupts();
             
-            // Run until movement complete
             unsigned long moveStartTime = millis();
             while (true) {
               noInterrupts();
               long dtg = stepper.distanceToGo();
+              if (dtg != 0) stepper.run();
               interrupts();
               if (dtg == 0) break;
-
-              noInterrupts();
-              stepper.run();
-              interrupts();
               wdt_reset();
-              
-              // Safety timeout
-              if (millis() - moveStartTime > 5000) {
-                break;
-              }
+              if (millis() - moveStartTime > 5000) break;
             }
             
-            // Update current position
             noInterrupts();
             currentPosition = stepper.currentPosition();
             interrupts();
             
-            // Wait a moment
-            delay(200);
-            
-            // Now start centering
             calibState = CALIB_IDLE;
             menuState = NORMAL;
-            
-            // Mark homing as done so centering can work
             homingDone = true;
-            
-            // Start centering
             startSmartCentering();
-            
             wdt_enable(WDTO_8S);
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
-            
-            // Note: startSmartCentering handles runStepperInInterrupt
           } else {
             calibState = CALIB_IDLE;
             menuState = NORMAL;
-            lcd.clear();
-            lcd.print(F("Calib Cancelled"));
+            setLcdContent("Calib Cancelled", "");
             delayTimer = currentMillis;
             delayWaiting = true;
             wdt_enable(WDTO_8S);
             displayLockoutUntil = currentMillis + DISPLAY_LOCKOUT_MS;
-            runStepperInInterrupt = true;
           }
         }
       }
@@ -3104,27 +2861,9 @@ void handleSetButton() {
  */
 void drawMotorCurrentSubmenu() {
   wdt_reset();
-  static unsigned long lastUpdate = 0;
-  if (lastMotorCurrentSubMenuItem != currentMotorCurrentSubMenuItem || millis() - lastUpdate > 100) {
-    lastUpdate = millis();
-    
-    // Clear both lines
-    lcd.setCursor(0, 0);
-    for (int j = 0; j < 20; j++) lcd.write(' ');
-    lcd.setCursor(0, 1);
-    for (int j = 0; j < 20; j++) lcd.write(' ');
-    
-    lcd.setCursor(0, 0);
-    lcd.print(F("Motor Current"));
-    
-    char lineBuffer[21];
-    memset(lineBuffer, 0, sizeof(lineBuffer));
-    snprintf(lineBuffer, sizeof(lineBuffer), ">%-17s", motorCurrentSubmenuItems[currentMotorCurrentSubMenuItem]);
-    lineBuffer[20] = '\0';
-    lcd.setCursor(0, 1);
-    lcd.print(lineBuffer);
-    lastMotorCurrentSubMenuItem = currentMotorCurrentSubMenuItem;
-  }
+  char line1[21];
+  snprintf(line1, 21, ">%-17s", motorCurrentSubmenuItems[currentMotorCurrentSubMenuItem]);
+  setLcdContent("Motor Current", line1);
 }
 
 /**
@@ -3132,27 +2871,9 @@ void drawMotorCurrentSubmenu() {
  */
 void drawHomingSubmenu() {
   wdt_reset();
-  static unsigned long lastUpdate = 0;
-  if (lastHomingSubMenuItem != currentHomingSubMenuItem || millis() - lastUpdate > 100) {
-    lastUpdate = millis();
-    
-    // Clear both lines
-    lcd.setCursor(0, 0);
-    for (int j = 0; j < 20; j++) lcd.write(' ');
-    lcd.setCursor(0, 1);
-    for (int j = 0; j < 20; j++) lcd.write(' ');
-    
-    lcd.setCursor(0, 0);
-    lcd.print(F("Homing Select"));
-    
-    char lineBuffer[21];
-    memset(lineBuffer, 0, sizeof(lineBuffer));
-    snprintf(lineBuffer, sizeof(lineBuffer), ">%-17s", homingSubmenuItems[currentHomingSubMenuItem]);
-    lineBuffer[20] = '\0';
-    lcd.setCursor(0, 1);
-    lcd.print(lineBuffer);
-    lastHomingSubMenuItem = currentHomingSubMenuItem;
-  }
+  char line1[21];
+  snprintf(line1, 21, ">%-17s", homingSubmenuItems[currentHomingSubMenuItem]);
+  setLcdContent("Homing Select", line1);
 }
 
 /**
@@ -3256,7 +2977,9 @@ void handleManualButtons() {
     interrupts();
    
     long movementSteps = encoderDiff * stepManualFactor;
+    noInterrupts();
     targetPos = stepper.currentPosition() + movementSteps;
+    interrupts();
     lastHandledEncoderPos = newEncoderPos;
     
     // Force display update on encoder movement
@@ -3270,13 +2993,17 @@ void handleManualButtons() {
     bool rightBtn = (digitalRead(RIGHT_BUTTON_PIN) == LOW);
    
     if (leftBtn && !leftLimitState) {
+      noInterrupts();
       targetPos = stepper.currentPosition() - stepManualFactorSW;
+      interrupts();
       // Force display update on button press
       lastDisplayedPosition = -1;
       lastDisplayedSteps = -999999;
     }
     else if (rightBtn && !rightLimitState) {
+      noInterrupts();
       targetPos = stepper.currentPosition() + stepManualFactorSW;
+      interrupts();
       // Force display update on button press
       lastDisplayedPosition = -1;
       lastDisplayedSteps = -999999;
@@ -3574,17 +3301,15 @@ void setup() {
   // Initialize LCD
   lcd.begin(20, 2);
   createBarGraphChars();
-  lcd.setCursor(0, 0);
-  lcdPrint_P(STR_WEB_GUIDE);
-  lcd.setCursor(0, 1);
-  lcdPrint_P(STR_INITIALIZING);
+  setLcdContent_P(STR_WEB_GUIDE, STR_INITIALIZING);
 
   stepper.setMinPulseWidth(500); // Minimum pulse width in microseconds
  
-  // Wait 2 seconds non-blocking
+  // Wait 2 seconds
   unsigned long startWait = millis();
   while (millis() - startWait < 2000) {
     wdt_reset();
+    updateLcdNonBlocking();
   }
  
   lcd.clear();
@@ -3664,16 +3389,13 @@ void setup() {
   
   // Check if calibration exists
   if (fullTravelSteps <= 0) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(F("No Calibration"));
-    lcd.setCursor(0, 1);
-    lcd.print(F("Run calibration"));
+    setLcdContent("No Calibration", "Run calibration");
    
     // Wait 2 seconds
     startWait = millis();
     while (millis() - startWait < 2000) {
       wdt_reset();
+      updateLcdNonBlocking();
     }
    
     startupHomingComplete = true;  // Skip startup sequence
@@ -3691,14 +3413,12 @@ void setup() {
     quickUpdateDisplayBuffered();
     
   } else {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print(F("Smart startup..."));
-   
+    setLcdContent("Smart startup...", "");
     // Wait 1 second
     startWait = millis();
     while (millis() - startWait < 1000) {
       wdt_reset();
+      updateLcdNonBlocking();
     }
    
     // Start smart startup sequence
@@ -3718,11 +3438,10 @@ void setup() {
  * FIXED: Does not change setpoint, keeps user's setpoint
  */
 void runSmartStartup() {
-  // CRITICAL: Disable interrupt control while starting up
-  runStepperInInterrupt = false;
+  // Use interrupt control for smooth movement
+  runStepperInInterrupt = true;
 
   static unsigned long startupTimeout = 0;
-  static bool firstMove = true;
   static long transitionPos1 = -1;
   static long transitionPos2 = -1;
   static bool foundTransition1 = false;
@@ -3736,11 +3455,9 @@ void runSmartStartup() {
   switch(startupState) {
     case STARTUP_IDLE:
       clearAllDisplayBuffers();
-      lcd.setCursor(0, 0);
-      lcd.print(F("Smart startup..."));
+      setLcdContent("Smart startup...", "");
       
       // Reset variables
-      firstMove = true;
       transitionPos1 = -1;
       transitionPos2 = -1;
       foundTransition1 = false;
@@ -3754,113 +3471,73 @@ void runSmartStartup() {
     case STARTUP_CHECK_LIMITS:
       // Check if we're stuck at a limit switch
       if (leftLimitState) {
-        // Stuck at LEFT limit - need to move RIGHT
-        lcd.setCursor(0, 1);
-        lcd.print(F("At LEFT limit   "));
-        delay(500);
-        
-        lcd.setCursor(0, 1);
-        lcd.print(F("Moving RIGHT... "));
-        
-        // Move away from left limit
+        setLcdContent("Smart startup...", "At LEFT limit");
+        noInterrupts();
         stepper.enableOutputs();
         stepper.setMaxSpeed(homingSpeed);
         stepper.setAcceleration(stepperAcceleration);
-        stepper.move(500);  // Move 500 steps right
-        
+        stepper.move(500);
+        interrupts();
         startupEscapingLimit = true;
         startupState = STARTUP_ESCAPE_LIMIT;
-        
       } else if (rightLimitState) {
-        // Stuck at RIGHT limit - need to move LEFT
-        lcd.setCursor(0, 1);
-        lcd.print(F("At RIGHT limit  "));
-        delay(500);
-        
-        lcd.setCursor(0, 1);
-        lcd.print(F("Moving LEFT...  "));
-        
-        // Move away from right limit
+        setLcdContent("Smart startup...", "At RIGHT limit");
+        noInterrupts();
         stepper.enableOutputs();
         stepper.setMaxSpeed(homingSpeed);
         stepper.setAcceleration(stepperAcceleration);
-        stepper.move(-500);  // Move 500 steps left
-        
+        stepper.move(-500);
+        interrupts();
         startupEscapingLimit = true;
         startupState = STARTUP_ESCAPE_LIMIT;
-        
       } else {
-        // NOT at a limit - proceed with normal startup
         startupState = STARTUP_SEEK_TRANSITION;
-        
-        // Determine search direction based on sensor state
         if (currentCenterSensorState == LOW) {
-          lcd.setCursor(0, 1);
-          lcd.print(F("R->L: LOW->HIGH"));
+          setLcdContent("Smart startup...", "R->L: LOW->HIGH");
           startupSearchDirection = -1;
           targetTransitionState = HIGH;
         } else {
-          lcd.setCursor(0, 1);
-          lcd.print(F("L->R: HIGH->LOW"));
+          setLcdContent("Smart startup...", "L->R: HIGH->LOW");
           startupSearchDirection = 1;
           targetTransitionState = LOW;
         }
-        
+        noInterrupts();
         stepper.enableOutputs();
         stepper.setMaxSpeed(STARTUP_CENTERING_SPEED);
         stepper.setAcceleration(stepperAcceleration);
         stepper.move(startupSearchDirection * 5000);
+        interrupts();
       }
       break;
       
     case STARTUP_ESCAPE_LIMIT:
       noInterrupts();
-      stepper.run();
       currentPosition = stepper.currentPosition();
       long distToGoEscape = stepper.distanceToGo();
       interrupts();
-      lastDisplayedSteps = currentPosition;         
-      lastDisplayedPosition = currentPosition;      
       
-      // Update limits while moving
-      leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
-      rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
-      
-      // Check if we've escaped the limit
       if (distToGoEscape == 0 || (!leftLimitState && !rightLimitState)) {
         noInterrupts();
         stepper.stop();
         interrupts();
-        
-        // Verify we're clear of limits
         if (!leftLimitState && !rightLimitState) {
-          lcd.setCursor(0, 1);
-          lcd.print(F("Limit cleared!  "));
-          delay(500);
-          
-          // Now determine search direction
+          startupState = STARTUP_SEEK_TRANSITION;
           if (currentCenterSensorState == LOW) {
-            lcd.setCursor(0, 1);
-            lcd.print(F("R->L: LOW->HIGH"));
+            setLcdContent("Smart startup...", "R->L: LOW->HIGH");
             startupSearchDirection = -1;
             targetTransitionState = HIGH;
           } else {
-            lcd.setCursor(0, 1);
-            lcd.print(F("L->R: HIGH->LOW"));
+            setLcdContent("Smart startup...", "L->R: HIGH->LOW");
             startupSearchDirection = 1;
             targetTransitionState = LOW;
           }
-          
+          noInterrupts();
           stepper.setMaxSpeed(STARTUP_CENTERING_SPEED);
           stepper.setAcceleration(stepperAcceleration);
           stepper.move(startupSearchDirection * 5000);
-          
-          startupState = STARTUP_SEEK_TRANSITION;
+          interrupts();
         } else {
-          // Still at limit after move - fall back to homing
-          lcd.setCursor(0, 1);
-          lcd.print(F("Stuck at limit! "));
-          delay(1000);
+          setLcdContent("Smart startup...", "Stuck at limit!");
           startupState = STARTUP_HOMING_FALLBACK;
         }
       }
@@ -3868,46 +3545,41 @@ void runSmartStartup() {
       
     case STARTUP_SEEK_TRANSITION:
       noInterrupts();
-      stepper.run();
       currentPosition = stepper.currentPosition();
       long distToGoSeek = stepper.distanceToGo();
       interrupts();
+
+      {
+        char buf[21];
+        snprintf(buf, 21, "%s P:%ld", (startupSearchDirection > 0 ? "R->L" : "L->R"), currentPosition);
+        setLcdContent("Smart startup...", buf);
+      }
       
       updateCenterSensor();
       leftLimitState = updateLimitSwitch(LEFT_LIMIT_PIN, leftLimitDebounceTime, leftLimitState);
       rightLimitState = updateLimitSwitch(RIGHT_LIMIT_PIN, rightLimitDebounceTime, rightLimitState);
       
-      // Check for transition
       if (currentCenterSensorState == targetTransitionState) {
+        noInterrupts();
         transitionPos1 = stepper.currentPosition();
+        interrupts();
         foundTransition1 = true;
-        lcd.setCursor(0, 1);
-        lcd.print(F("Transition found!"));
+        setLcdContent("Smart startup...", "Transition found!");
       }
       
-      // Stop conditions
       if (foundTransition1 || leftLimitState || rightLimitState || 
           distToGoSeek == 0 || (millis() - startupTimeout > 10000)) {
-        
         noInterrupts();
         stepper.stop();
         interrupts();
-        
         if (foundTransition1) {
-          lcd.setCursor(0, 1);
-          lcd.print(F("Back off...     "));
-          
-          currentPosition = stepper.currentPosition();
+          setLcdContent("Smart startup...", "Back off...");
+          noInterrupts();
           stepper.move(-startupSearchDirection * 30);
+          interrupts();
           startupState = STARTUP_BACK_OFF;
         } else {
-          lcd.setCursor(0, 1);
-          if (leftLimitState || rightLimitState) {
-            lcd.print(F("Limit - homing  "));
-          } else {
-            lcd.print(F("No trans - home "));
-          }
-          delay(500);
+          setLcdContent("Smart startup...", (leftLimitState || rightLimitState) ? "Limit - homing" : "No trans - home");
           startupState = STARTUP_HOMING_FALLBACK;
         }
       }
@@ -3915,67 +3587,47 @@ void runSmartStartup() {
       
     case STARTUP_BACK_OFF:
       noInterrupts();
-      stepper.run();
       currentPosition = stepper.currentPosition();
       long distToGoBack = stepper.distanceToGo();
       interrupts();
-      
       if (distToGoBack == 0) {
-        lcd.setCursor(0, 1);
-        lcd.print(F("Verifying...    "));
-        
-        currentPosition = stepper.currentPosition();
+        setLcdContent("Smart startup...", "Verifying...");
+        noInterrupts();
         stepper.setMaxSpeed(centerFineSpeed);
         stepper.move(startupSearchDirection * 60);
-        
+        interrupts();
         startupState = STARTUP_VERIFY_TRANSITION;
       }
       break;
       
     case STARTUP_VERIFY_TRANSITION:
       noInterrupts();
-      stepper.run();
       currentPosition = stepper.currentPosition();
       long distToGoVerify = stepper.distanceToGo();
       interrupts();
-      
-      updateCenterSensor();
-      
       if (currentCenterSensorState == targetTransitionState) {
+        noInterrupts();
         transitionPos2 = stepper.currentPosition();
-        
-        long centerTransitionPos = 0;
-        if (transitionPos2 != -1) {
-          centerTransitionPos = (transitionPos1 + transitionPos2) / 2;
-        } else {
-          centerTransitionPos = transitionPos1;
-        }
-        
+        long centerTransitionPos = (transitionPos2 != -1) ? (transitionPos1 + transitionPos2) / 2 : transitionPos1;
         stepper.moveTo(centerTransitionPos);
+        interrupts();
         startupState = STARTUP_SET_CENTER;
-        
-        lcd.setCursor(0, 1);
-        lcd.print(F("Moving to center"));
+        setLcdContent("Smart startup...", "Moving to center");
       }
-      
       if (distToGoVerify == 0) {
         noInterrupts();
         stepper.moveTo(transitionPos1);
         interrupts();
         startupState = STARTUP_SET_CENTER;
-        
-        lcd.setCursor(0, 1);
-        lcd.print(F("Using 1st detect"));
+        setLcdContent("Smart startup...", "Using 1st detect");
       }
       break;
       
     case STARTUP_SET_CENTER:
       noInterrupts();
-      stepper.run();
       currentPosition = stepper.currentPosition();
       long distToGoCenter = stepper.distanceToGo();
       interrupts();
-      
       if (distToGoCenter == 0 && !startupShowingMessage) {
         // CRITICAL: Calculate and set center position
         long centerPos = 0;
@@ -4003,13 +3655,9 @@ void runSmartStartup() {
         }
         
         // Display success message
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print(F("Startup Complete"));
-        lcd.setCursor(0, 1);
         char msg[21];
-        snprintf(msg, sizeof(msg), "Pos:%ld SP:%.2fV", currentPosition, setPoint);
-        lcd.print(msg);
+        snprintf(msg, 21, "Pos:%ld SP:%.2fV", currentPosition, setPoint);
+        setLcdContent("Startup Complete", msg);
         
         digitalWrite(CENTER_LED_PIN, HIGH);
         
@@ -4043,13 +3691,7 @@ void runSmartStartup() {
       break;
       
     case STARTUP_HOMING_FALLBACK:
-      // Note: Homing will handle runStepperInInterrupt
-      clearAllDisplayBuffers();
-      lcd.setCursor(0, 0);
-      lcd.print(F("Startup Failed"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("Using Homing..."));
-      delay(500);
+      setLcdContent("Startup Failed", "Using Homing...");
       
       noInterrupts();
       stepper.stop();
@@ -4129,17 +3771,14 @@ void loop() {
   // TASK 6: Handle FAST CENTERING (if active) - RUNS AT FULL SPEED
   // ====================================================================
   if (centeringActive) {
-    // CRITICAL: During centering, we run stepper in MAIN LOOP for precise control
-    runStepperInInterrupt = false;  // Disable interrupt stepper control
+    // Ensure interrupt control is active
+    runStepperInInterrupt = true;
     
-    // Run the fast centering state machine (runs stepper.run() internally)
+    // Run the fast centering state machine
     runSmartCentering();
     
-    // If centering just completed, re-enable interrupt stepper control
+    // If centering just completed, refresh display
     if (!centeringActive) {
-      runStepperInInterrupt = true;  // Re-enable interrupt stepper control
-      
-      // Force immediate display update after centering
       lastDisplayedPosition = -1;
       strcpy(lastVoltageStr, "");
       lastDisplayedSteps = -999999;
